@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>MPM Fluid - Mobile Sensor Demo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+canvas {
+  display: block;
+  width: 100%; height: 100%;
+}
+#overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.85);
+  color: #fff; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  z-index: 10; text-align: center; padding: 20px;
+}
+#overlay h1 { font-size: 22px; margin-bottom: 12px; }
+#overlay p { font-size: 14px; color: #aaa; margin-bottom: 20px; max-width: 320px; line-height: 1.5; }
+#startBtn {
+  background: #2196F3; color: #fff; border: none; border-radius: 28px;
+  padding: 14px 40px; font-size: 18px; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+#startBtn:active { background: #1976D2; }
+#hud {
+  position: fixed; top: 8px; left: 8px;
+  color: rgba(255,255,255,0.5); font-family: monospace; font-size: 11px;
+  pointer-events: none; z-index: 5; line-height: 1.4;
+}
+#shake-flash {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(100,180,255,0.15);
+  pointer-events: none; z-index: 4;
+  opacity: 0; transition: opacity 0.3s;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="shake-flash"></div>
+<div id="hud"></div>
+<div id="overlay">
+  <h1>MPM Fluid Simulation</h1>
+  <p>Tilt your phone to change gravity direction. Shake to disturb the fluid. Touch and drag to push particles.</p>
+  <button id="startBtn">Start Simulation</button>
+</div>
+<script>
+"use strict";
+
+// --- Configuration ---
+const GRID_W = 100;
+const GRID_H = 75;
+const NUM_PARTICLES = 8000;
+const WALL_BOUNCE_RAND = 0.03;
+
+// --- Simulation state ---
+let particles, grid, activeNodes, numActiveNodes;
+let gravityX = 0.0, gravityY = 0.005;
+let densitySetting = 3.5;
+let stiffness = 0.5;
+let bulkViscosity = 3.0;
+let elasticity = 1.0;
+let viscosity = 1.0;
+let yieldRate = 1.0;
+let smoothing = 1.0;
+
+// Obstacle
+const obsCX = GRID_W * 0.75;
+const obsCY = GRID_H * 0.75;
+const obsR = GRID_W * 0.075;
+const obsR2 = obsR * obsR;
+
+// Touch state
+let touchActive = false;
+let touchX = 0, touchY = 0;
+let prevTouchX = 0, prevTouchY = 0;
+
+// Sensor state
+let sensorEnabled = false;
+let orientBeta = 0, orientGamma = 0;
+let shakeThreshold = 25;
+let lastAccX = 0, lastAccY = 0, lastAccZ = 0;
+let shakeImpulse = 0;
+
+// Canvas / rendering
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let canvasW, canvasH, scaleX, scaleY;
+
+// --- Node class (flat arrays for performance) ---
+// Grid stored as flat Float32Arrays
+const GRID_SIZE = GRID_W * GRID_H;
+const gm  = new Float32Array(GRID_SIZE);
+const ggx = new Float32Array(GRID_SIZE);
+const ggy = new Float32Array(GRID_SIZE);
+const gu  = new Float32Array(GRID_SIZE);
+const gv  = new Float32Array(GRID_SIZE);
+const gax = new Float32Array(GRID_SIZE);
+const gay = new Float32Array(GRID_SIZE);
+const gActive = new Uint8Array(GRID_SIZE);
+
+// Active node indices
+const activeIdx = new Int32Array(GRID_SIZE);
+
+// --- Particle arrays (struct of arrays for performance) ---
+const px_pos = new Float32Array(NUM_PARTICLES);
+const py_pos = new Float32Array(NUM_PARTICLES);
+const pu_vel = new Float32Array(NUM_PARTICLES);
+const pv_vel = new Float32Array(NUM_PARTICLES);
+const ppu = new Float32Array(NUM_PARTICLES);
+const ppv = new Float32Array(NUM_PARTICLES);
+
+const pT00 = new Float32Array(NUM_PARTICLES);
+const pT01 = new Float32Array(NUM_PARTICLES);
+const pT11 = new Float32Array(NUM_PARTICLES);
+
+const pcx = new Int32Array(NUM_PARTICLES);
+const pcy = new Int32Array(NUM_PARTICLES);
+
+// Basis function values per particle (3 each)
+const ppx0 = new Float32Array(NUM_PARTICLES);
+const ppx1 = new Float32Array(NUM_PARTICLES);
+const ppx2 = new Float32Array(NUM_PARTICLES);
+const ppy0 = new Float32Array(NUM_PARTICLES);
+const ppy1 = new Float32Array(NUM_PARTICLES);
+const ppy2 = new Float32Array(NUM_PARTICLES);
+const pgx0 = new Float32Array(NUM_PARTICLES);
+const pgx1 = new Float32Array(NUM_PARTICLES);
+const pgx2 = new Float32Array(NUM_PARTICLES);
+const pgy0 = new Float32Array(NUM_PARTICLES);
+const pgy1 = new Float32Array(NUM_PARTICLES);
+const pgy2 = new Float32Array(NUM_PARTICLES);
+
+
+function initParticles() {
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    px_pos[i] = 5 + Math.random() * (GRID_W - 10);
+    py_pos[i] = 5 + Math.random() * (GRID_H / 4);
+    pu_vel[i] = 0;
+    pv_vel[i] = 0;
+    ppu[i] = 0;
+    ppv[i] = 0;
+    pT00[i] = 0;
+    pT01[i] = 0;
+    pT11[i] = 0;
+  }
+}
+
+function clearGrid() {
+  gm.fill(0);
+  ggx.fill(0);
+  ggy.fill(0);
+  gu.fill(0);
+  gv.fill(0);
+  gax.fill(0);
+  gay.fill(0);
+  gActive.fill(0);
+  numActiveNodes = 0;
+}
+
+function idx(i, j) {
+  return i * GRID_H + j;
+}
+
+function simulate() {
+  clearGrid();
+
+  const GW = GRID_W;
+  const GH = GRID_H;
+  const NP = NUM_PARTICLES;
+
+  // ---- Pass 1: Particle to Grid ----
+  for (let ip = 0; ip < NP; ip++) {
+    const pxv = px_pos[ip];
+    const pyv = py_pos[ip];
+    const cx = pcx[ip] = (pxv - 0.5) | 0;
+    const cy = pcy[ip] = (pyv - 0.5) | 0;
+
+    const puv = pu_vel[ip];
+    const pvv = pv_vel[ip];
+    ppu[ip] = puv;
+    ppv[ip] = pvv;
+
+    // Compute basis functions
+    let x = cx - pxv;
+    const bpx0 = ppx0[ip] = 0.5 * x * x + 1.5 * x + 1.125;
+    const bgx0 = pgx0[ip] = x + 1.5;
+    x++;
+    const bpx1 = ppx1[ip] = -x * x + 0.75;
+    const bgx1 = pgx1[ip] = -2.0 * x;
+    x++;
+    const bpx2 = ppx2[ip] = 0.5 * x * x - 1.5 * x + 1.125;
+    const bgx2 = pgx2[ip] = x - 1.5;
+
+    let y = cy - pyv;
+    const bpy0 = ppy0[ip] = 0.5 * y * y + 1.5 * y + 1.125;
+    const bgy0 = pgy0[ip] = y + 1.5;
+    y++;
+    const bpy1 = ppy1[ip] = -y * y + 0.75;
+    const bgy1 = pgy1[ip] = -2.0 * y;
+    y++;
+    const bpy2 = ppy2[ip] = 0.5 * y * y - 1.5 * y + 1.125;
+    const bgy2 = pgy2[ip] = y - 1.5;
+
+    const bpxArr = [bpx0, bpx1, bpx2];
+    const bgxArr = [bgx0, bgx1, bgx2];
+    const bpyArr = [bpy0, bpy1, bpy2];
+    const bgyArr = [bgy0, bgy1, bgy2];
+
+    for (let i = 0; i < 3; i++) {
+      const ci = cx + i;
+      if (ci < 0 || ci >= GW) continue;
+      const pxi = bpxArr[i];
+      const gxi = bgxArr[i];
+      for (let j = 0; j < 3; j++) {
+        const cj = cy + j;
+        if (cj < 0 || cj >= GH) continue;
+        const n = ci * GH + cj;
+        if (!gActive[n]) {
+          gActive[n] = 1;
+          activeIdx[numActiveNodes++] = n;
+        }
+        const phi = pxi * bpyArr[j];
+        gm[n]  += phi;
+        ggx[n] += gxi * bpyArr[j];
+        ggy[n] += pxi * bgyArr[j];
+        gu[n]  += phi * puv;
+        gv[n]  += phi * pvv;
+      }
+    }
+  }
+
+  // Normalize grid velocities
+  for (let ni = 0; ni < numActiveNodes; ni++) {
+    const n = activeIdx[ni];
+    if (gm[n] > 0) {
+      gu[n] /= gm[n];
+      gv[n] /= gm[n];
+    }
+  }
+
+  // ---- Pass 2: Compute forces, transfer to grid ----
+  const stiffnessBulk = stiffness * bulkViscosity;
+
+  for (let ip = 0; ip < NP; ip++) {
+    const cx = pcx[ip];
+    const cy = pcy[ip];
+
+    const bpxArr = [ppx0[ip], ppx1[ip], ppx2[ip]];
+    const bgxArr = [pgx0[ip], pgx1[ip], pgx2[ip]];
+    const bpyArr = [ppy0[ip], ppy1[ip], ppy2[ip]];
+    const bgyArr = [pgy0[ip], pgy1[ip], pgy2[ip]];
+
+    let dudx = 0, dudy = 0, dvdx = 0, dvdy = 0;
+    for (let i = 0; i < 3; i++) {
+      const gxi = bgxArr[i];
+      const pxi = bpxArr[i];
+      for (let j = 0; j < 3; j++) {
+        const n = (cx + i) * GH + (cy + j);
+        const gxf = gxi * bpyArr[j];
+        const gyf = pxi * bgyArr[j];
+        dudx += gu[n] * gxf;
+        dudy += gu[n] * gyf;
+        dvdx += gv[n] * gxf;
+        dvdy += gv[n] * gyf;
+      }
+    }
+
+    const w1 = dudy - dvdx;
+    const wT0 = w1 * pT01[ip];
+    const wT1 = 0.5 * w1 * (pT00[ip] - pT11[ip]);
+    const D00 = dudx;
+    const D01 = 0.5 * (dudy + dvdx);
+    const D11 = dvdy;
+    let trace = 0.5 * (D00 + D11);
+    const D00c = D00 - trace;
+    const D11c = D11 - trace;
+
+    pT00[ip] += (-wT0 + D00c) - yieldRate * pT00[ip];
+    pT01[ip] += ( wT1 + D01)  - yieldRate * pT01[ip];
+    pT11[ip] += ( wT0 + D11c) - yieldRate * pT11[ip];
+
+    // Clamp stress
+    const norma = pT00[ip]*pT00[ip] + 2*pT01[ip]*pT01[ip] + pT11[ip]*pT11[ip];
+    if (norma > 10) {
+      pT00[ip] = pT01[ip] = pT11[ip] = 0;
+    }
+
+    // Density interpolation
+    const pxv = px_pos[ip];
+    const pyv = py_pos[ip];
+    const cx0 = pxv | 0;
+    const cy0 = pyv | 0;
+    const cx1 = cx0 + 1;
+    const cy1 = cy0 + 1;
+
+    // Clamp to grid bounds
+    const cx0c = Math.max(0, Math.min(cx0, GW - 2));
+    const cy0c = Math.max(0, Math.min(cy0, GH - 2));
+    const cx1c = cx0c + 1;
+    const cy1c = cy0c + 1;
+
+    const n00 = cx0c * GH + cy0c;
+    const n01 = cx0c * GH + cy1c;
+    const n10 = cx1c * GH + cy0c;
+    const n11 = cx1c * GH + cy1c;
+
+    const p00 = gm[n00], x00 = ggx[n00], y00 = ggy[n00];
+    const p01 = gm[n01], x01 = ggx[n01], y01 = ggy[n01];
+    const p10 = gm[n10], x10 = ggx[n10], y10 = ggy[n10];
+    const p11 = gm[n11], x11 = ggx[n11], y11 = ggy[n11];
+
+    const pdx = p10 - p00;
+    const pdy = p01 - p00;
+    const C20 = 3 * pdx - x10 - 2 * x00;
+    const C02 = 3 * pdy - y01 - 2 * y00;
+    const C30 = -2 * pdx + x10 + x00;
+    const C03 = -2 * pdy + y01 + y00;
+    const csum1 = p00 + y00 + C02 + C03;
+    const csum2 = p00 + x00 + C20 + C30;
+    const C21 = 3 * p11 - 2 * x01 - x11 - 3 * csum1 - C20;
+    const C31 = (-2 * p11 + x01 + x11 + 2 * csum1) - C30;
+    const C12 = 3 * p11 - 2 * y10 - y11 - 3 * csum2 - C02;
+    const C13 = (-2 * p11 + y10 + y11 + 2 * csum2) - C03;
+    const C11 = x01 - C13 - C12 - x00;
+
+    const u1 = pxv - cx0c;
+    const u2 = u1 * u1;
+    const u3 = u1 * u2;
+    const v1 = pyv - cy0c;
+    const v2 = v1 * v1;
+    const v3 = v1 * v2;
+
+    const density = p00 + x00*u1 + y00*v1 + C20*u2 + C02*v2 +
+      C30*u3 + C03*v3 + C21*u2*v1 + C31*u3*v1 + C12*u1*v2 + C13*u1*v3 + C11*u1*v1;
+
+    let pressure = (stiffness / Math.max(1, densitySetting)) * (density - densitySetting);
+    if (pressure > 2) pressure = 2;
+
+    // Collisions
+    let fx = 0, fy = 0;
+    let bounced = false;
+
+    if (pxv < 3) { fx += 3 - pxv; bounced = true; }
+    else if (pxv > GW - 3) { fx += (GW - 3) - pxv; bounced = true; }
+
+    if (pyv < 3) { fy += 3 - pyv; bounced = true; }
+    else if (pyv > GH - 3) { fy += (GH - 3) - pyv; bounced = true; }
+
+    // Obstacle collision
+    const odx = obsCX - pxv;
+    const ody = obsCY - pyv;
+    const oD2 = odx*odx + ody*ody;
+    if (oD2 < obsR2) {
+      const oD = Math.sqrt(oD2);
+      const dR = obsR - oD;
+      fx -= dR * (odx / oD);
+      fy -= dR * (ody / oD);
+      bounced = true;
+    }
+
+    trace *= stiffnessBulk;
+    const T00 = elasticity * pT00[ip] + viscosity * D00c + pressure + trace;
+    const T01v = elasticity * pT01[ip] + viscosity * D01;
+    const T11 = elasticity * pT11[ip] + viscosity * D11c + pressure + trace;
+
+    for (let i = 0; i < 3; i++) {
+      const ppxi = bpxArr[i];
+      const pgxi = bgxArr[i];
+      for (let j = 0; j < 3; j++) {
+        const n = (cx + i) * GH + (cy + j);
+        const phi = ppxi * bpyArr[j];
+        const dx = pgxi * bpyArr[j];
+        const dy = ppxi * bgyArr[j];
+        if (bounced) {
+          gax[n] += fx * phi - (dx * T00 + dy * T01v);
+          gay[n] += fy * phi - (dx * T01v + dy * T11);
+        } else {
+          gax[n] -= (dx * T00 + dy * T01v);
+          gay[n] -= (dx * T01v + dy * T11);
+        }
+      }
+    }
+  }
+
+  // Normalize accelerations, clear grid velocity for pass 3
+  for (let ni = 0; ni < numActiveNodes; ni++) {
+    const n = activeIdx[ni];
+    if (gm[n] > 0) {
+      gax[n] /= gm[n];
+      gay[n] /= gm[n];
+      gu[n] = 0;
+      gv[n] = 0;
+    }
+  }
+
+  // ---- Pass 3: Grid to Particle velocity ----
+  const rightEdge = GW - 3;
+  const bottomEdge = GH - 3;
+
+  // Compute touch delta in grid coords
+  let tdx = 0, tdy = 0;
+  if (touchActive) {
+    tdx = (touchX - prevTouchX);
+    tdy = (touchY - prevTouchY);
+  }
+
+  for (let ip = 0; ip < NP; ip++) {
+    const cx = pcx[ip];
+    const cy = pcy[ip];
+    const bpxArr = [ppx0[ip], ppx1[ip], ppx2[ip]];
+    const bpyArr = [ppy0[ip], ppy1[ip], ppy2[ip]];
+
+    let pu = 0, pv = 0;
+    for (let i = 0; i < 3; i++) {
+      const ppxi = bpxArr[i];
+      for (let j = 0; j < 3; j++) {
+        const n = (cx + i) * GH + (cy + j);
+        const phi = ppxi * bpyArr[j];
+        pu += phi * gax[n];
+        pv += phi * gay[n];
+      }
+    }
+
+    // Apply gravity (sensor-driven or default)
+    pu += gravityX;
+    pv += gravityY;
+
+    // Apply shake impulse
+    if (shakeImpulse > 0) {
+      pu += (Math.random() - 0.5) * shakeImpulse * 0.04;
+      pv += (Math.random() - 0.5) * shakeImpulse * 0.04;
+    }
+
+    // Touch interaction
+    if (touchActive) {
+      const pxv = px_pos[ip];
+      const pyv = py_pos[ip];
+      const vx = Math.abs(pxv - touchX);
+      const vy = Math.abs(pyv - touchY);
+      if (vx < 10 && vy < 10) {
+        const weight = (1 - vx / 10) * (1 - vy / 10);
+        pu += weight * (tdx - pu_vel[ip]);
+        pv += weight * (tdy - pv_vel[ip]);
+      }
+    }
+
+    pu_vel[ip] += pu;
+    pv_vel[ip] += pv;
+
+    // Wall collisions with randomness
+    const xf = px_pos[ip] + pu_vel[ip];
+    const yf = py_pos[ip] + pv_vel[ip];
+
+    if (xf < 2) {
+      pu_vel[ip] += (2 - xf) + Math.random() * WALL_BOUNCE_RAND;
+    } else if (xf > rightEdge) {
+      pu_vel[ip] += rightEdge - xf - Math.random() * WALL_BOUNCE_RAND;
+    }
+    if (yf < 2) {
+      pv_vel[ip] += (2 - yf) + Math.random() * WALL_BOUNCE_RAND;
+    } else if (yf > bottomEdge) {
+      pv_vel[ip] += bottomEdge - yf - Math.random() * WALL_BOUNCE_RAND;
+    }
+
+    // Transfer velocity back to grid
+    const puv = pu_vel[ip];
+    const pvv = pv_vel[ip];
+    for (let i = 0; i < 3; i++) {
+      const ppxi = bpxArr[i];
+      for (let j = 0; j < 3; j++) {
+        const n = (cx + i) * GH + (cy + j);
+        const phi = ppxi * bpyArr[j];
+        gu[n] += phi * puv;
+        gv[n] += phi * pvv;
+      }
+    }
+  }
+
+  // Normalize grid velocity
+  for (let ni = 0; ni < numActiveNodes; ni++) {
+    const n = activeIdx[ni];
+    if (gm[n] > 0) {
+      gu[n] /= gm[n];
+      gv[n] /= gm[n];
+    }
+  }
+
+  // ---- Pass 4: Position update ----
+  for (let ip = 0; ip < NP; ip++) {
+    const cx = pcx[ip];
+    const cy = pcy[ip];
+    const bpxArr = [ppx0[ip], ppx1[ip], ppx2[ip]];
+    const bpyArr = [ppy0[ip], ppy1[ip], ppy2[ip]];
+
+    let guv = 0, gvv = 0;
+    for (let i = 0; i < 3; i++) {
+      const ppxi = bpxArr[i];
+      for (let j = 0; j < 3; j++) {
+        const n = (cx + i) * GH + (cy + j);
+        const phi = ppxi * bpyArr[j];
+        guv += phi * gu[n];
+        gvv += phi * gv[n];
+      }
+    }
+
+    px_pos[ip] += guv;
+    py_pos[ip] += gvv;
+    pu_vel[ip] += smoothing * (guv - pu_vel[ip]);
+    pv_vel[ip] += smoothing * (gvv - pv_vel[ip]);
+  }
+
+  // Decay shake impulse
+  if (shakeImpulse > 0) {
+    shakeImpulse *= 0.85;
+    if (shakeImpulse < 0.1) shakeImpulse = 0;
+  }
+}
+
+
+// --- Rendering ---
+function render() {
+  ctx.fillStyle = "#0a0a14";
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  // Draw obstacle
+  ctx.beginPath();
+  ctx.arc(obsCX * scaleX, obsCY * scaleY, obsR * Math.min(scaleX, scaleY), 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(60,60,80,0.6)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(100,100,140,0.4)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Draw particles as small lines showing velocity
+  ctx.strokeStyle = "rgba(140,200,255,0.7)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let ip = 0; ip < NUM_PARTICLES; ip++) {
+    const x = px_pos[ip] * scaleX;
+    const y = py_pos[ip] * scaleY;
+    const dx = pu_vel[ip] * scaleX * 1.5;
+    const dy = pv_vel[ip] * scaleY * 1.5;
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - dx, y - dy);
+  }
+  ctx.stroke();
+
+  // Gravity direction indicator
+  const mag = Math.sqrt(gravityX * gravityX + gravityY * gravityY);
+  if (mag > 0.0001) {
+    const indX = canvasW - 30;
+    const indY = 30;
+    const arrowLen = 18;
+    const nx = gravityX / mag;
+    const ny = gravityY / mag;
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(indX, indY, 14, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(100,200,255,0.8)";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(indX, indY);
+    ctx.lineTo(indX + nx * arrowLen, indY + ny * arrowLen);
+    ctx.stroke();
+  }
+}
+
+
+// --- Resize ---
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvasW = window.innerWidth;
+  canvasH = window.innerHeight;
+  canvas.width = canvasW * dpr;
+  canvas.height = canvasH * dpr;
+  canvas.style.width = canvasW + "px";
+  canvas.style.height = canvasH + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  scaleX = canvasW / GRID_W;
+  scaleY = canvasH / GRID_H;
+}
+window.addEventListener("resize", resize);
+
+
+// --- Touch handling ---
+canvas.addEventListener("touchstart", function(e) {
+  e.preventDefault();
+  const t = e.touches[0];
+  touchX = t.clientX / scaleX;
+  touchY = t.clientY / scaleY;
+  prevTouchX = touchX;
+  prevTouchY = touchY;
+  touchActive = true;
+}, { passive: false });
+
+canvas.addEventListener("touchmove", function(e) {
+  e.preventDefault();
+  const t = e.touches[0];
+  prevTouchX = touchX;
+  prevTouchY = touchY;
+  touchX = t.clientX / scaleX;
+  touchY = t.clientY / scaleY;
+}, { passive: false });
+
+canvas.addEventListener("touchend", function(e) {
+  e.preventDefault();
+  touchActive = false;
+}, { passive: false });
+
+canvas.addEventListener("touchcancel", function(e) {
+  touchActive = false;
+}, { passive: false });
+
+// Mouse fallback for desktop testing
+canvas.addEventListener("mousedown", function(e) {
+  touchX = e.clientX / scaleX;
+  touchY = e.clientY / scaleY;
+  prevTouchX = touchX;
+  prevTouchY = touchY;
+  touchActive = true;
+});
+canvas.addEventListener("mousemove", function(e) {
+  if (!touchActive) return;
+  prevTouchX = touchX;
+  prevTouchY = touchY;
+  touchX = e.clientX / scaleX;
+  touchY = e.clientY / scaleY;
+});
+canvas.addEventListener("mouseup", function() { touchActive = false; });
+
+
+// --- Sensor: DeviceOrientation (tilt → gravity direction) ---
+function handleOrientation(e) {
+  // beta: front-back tilt (-180 to 180), gamma: left-right tilt (-90 to 90)
+  orientBeta = e.beta || 0;
+  orientGamma = e.gamma || 0;
+
+  // Convert tilt angles to gravity vector
+  // gamma controls X gravity (tilt left/right)
+  // beta controls Y gravity (tilt forward/back)
+  const GRAVITY_SCALE = 0.005;
+  const MAX_ANGLE = 60; // clamp angles
+
+  const clampedGamma = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientGamma));
+  const clampedBeta = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientBeta));
+
+  gravityX = (clampedGamma / MAX_ANGLE) * GRAVITY_SCALE;
+  gravityY = (clampedBeta / MAX_ANGLE) * GRAVITY_SCALE;
+}
+
+
+// --- Sensor: DeviceMotion (shake detection) ---
+function handleMotion(e) {
+  const acc = e.accelerationIncludingGravity || e.acceleration;
+  if (!acc) return;
+
+  const ax = acc.x || 0;
+  const ay = acc.y || 0;
+  const az = acc.z || 0;
+
+  const delta = Math.abs(ax - lastAccX) + Math.abs(ay - lastAccY) + Math.abs(az - lastAccZ);
+  lastAccX = ax;
+  lastAccY = ay;
+  lastAccZ = az;
+
+  if (delta > shakeThreshold) {
+    shakeImpulse = Math.min(delta, 80);
+    // Visual feedback
+    const flash = document.getElementById("shake-flash");
+    flash.style.opacity = "1";
+    setTimeout(function() { flash.style.opacity = "0"; }, 200);
+  }
+}
+
+
+// --- Sensor permission + start ---
+async function enableSensors() {
+  // iOS 13+ requires explicit permission request
+  if (typeof DeviceOrientationEvent !== "undefined" &&
+      typeof DeviceOrientationEvent.requestPermission === "function") {
+    try {
+      const perm = await DeviceOrientationEvent.requestPermission();
+      if (perm === "granted") {
+        window.addEventListener("deviceorientation", handleOrientation);
+        sensorEnabled = true;
+      }
+    } catch (err) {
+      console.warn("Orientation permission denied:", err);
+    }
+  } else if ("DeviceOrientationEvent" in window) {
+    window.addEventListener("deviceorientation", handleOrientation);
+    sensorEnabled = true;
+  }
+
+  if (typeof DeviceMotionEvent !== "undefined" &&
+      typeof DeviceMotionEvent.requestPermission === "function") {
+    try {
+      const perm = await DeviceMotionEvent.requestPermission();
+      if (perm === "granted") {
+        window.addEventListener("devicemotion", handleMotion);
+      }
+    } catch (err) {
+      console.warn("Motion permission denied:", err);
+    }
+  } else if ("DeviceMotionEvent" in window) {
+    window.addEventListener("devicemotion", handleMotion);
+  }
+}
+
+
+// --- Main loop ---
+let running = false;
+let fps = 0, frameCount = 0, lastFpsTime = 0;
+
+function loop(timestamp) {
+  if (!running) return;
+
+  simulate();
+  render();
+
+  // FPS counter
+  frameCount++;
+  if (timestamp - lastFpsTime > 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    lastFpsTime = timestamp;
+    const hud = document.getElementById("hud");
+    const sensorStatus = sensorEnabled ? "active" : "desktop mode";
+    hud.textContent = fps + " fps | " + NUM_PARTICLES + " particles | sensors: " + sensorStatus;
+  }
+
+  requestAnimationFrame(loop);
+}
+
+
+// --- Start button ---
+document.getElementById("startBtn").addEventListener("click", async function() {
+  document.getElementById("overlay").style.display = "none";
+
+  resize();
+  initParticles();
+
+  await enableSensors();
+
+  running = true;
+  lastFpsTime = performance.now();
+  requestAnimationFrame(loop);
+});
+</script>
+</body>
+</html>
