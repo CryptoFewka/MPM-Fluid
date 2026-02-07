@@ -755,8 +755,8 @@ function render() {
   const NS = numSets;
 
   if (useBright) {
-    // Full brightness: uniform color per set, fixed-length strokes
-    const fixedLen = 2.0;
+    // Full brightness: uniform color per set, fixed-length strokes in screen space
+    const fixedPx = 7; // fixed stroke length in pixels (direction-independent)
     const minSpeed = 0.05;
     var brightLookup = colorMode === "desert" ? setBrightDesert :
                        colorMode === "static" ? setBrightOcean : setBrightColors;
@@ -772,11 +772,14 @@ function render() {
         const speed = Math.sqrt(uv * uv + vv * vv);
         let dx, dy;
         if (speed > minSpeed) {
-          dx = (uv / speed) * fixedLen * scaleX;
-          dy = (vv / speed) * fixedLen * scaleY;
+          // Compute direction in screen space, then normalize to fixedPx
+          let sx = (uv / speed) * scaleX;
+          let sy = (vv / speed) * scaleY;
+          const slen = Math.sqrt(sx * sx + sy * sy);
+          dx = (sx / slen) * fixedPx;
+          dy = (sy / slen) * fixedPx;
         } else {
-          const halfLen = fixedLen * 0.4;
-          dx = halfLen * scaleX;
+          dx = fixedPx;
           dy = 0;
         }
         ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
