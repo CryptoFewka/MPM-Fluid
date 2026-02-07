@@ -71,8 +71,8 @@ const WALL_BOUNCE_RAND = 0.03;
 
 // --- Simulation state ---
 let particles, grid, activeNodes, numActiveNodes;
-let gravityX = 0.0, gravityY = 0.05;
-let prevGravityX = 0.0, prevGravityY = 0.05;
+let gravityX = 0.0, gravityY = 0.005;
+let prevGravityX = 0.0, prevGravityY = 0.005;
 let inertiaX = 0.0, inertiaY = 0.0;
 const INERTIA_STRENGTH = 80.0; // how strongly the fluid resists coordinate rotation
 const INERTIA_DECAY = 0.9;     // how quickly the inertial impulse fades
@@ -472,8 +472,8 @@ function simulate() {
 
     // Apply shake impulse
     if (shakeImpulse > 0) {
-      pu += (Math.random() - 0.5) * shakeImpulse * 0.4;
-      pv += (Math.random() - 0.5) * shakeImpulse * 0.4;
+      pu += (Math.random() - 0.5) * shakeImpulse * 0.04;
+      pv += (Math.random() - 0.5) * shakeImpulse * 0.04;
     }
 
     // Touch interaction
@@ -697,7 +697,7 @@ function handleOrientation(e) {
   // Convert tilt angles to gravity vector
   // gamma controls X gravity (tilt left/right)
   // beta controls Y gravity (tilt forward/back)
-  const GRAVITY_SCALE = 0.05;
+  const GRAVITY_SCALE = 0.005;
   const MAX_ANGLE = 60; // clamp angles
 
   const clampedGamma = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientGamma));
