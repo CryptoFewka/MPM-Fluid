@@ -142,8 +142,35 @@ function buildPalette() {
 }
 buildPalette();
 
+// Desert palette: velocity-mapped (deep brown -> burnt orange -> sand -> gold -> cream)
+const desertPalette = [];
+function buildDesertPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {        // dark brown -> burnt sienna
+      const s = t / 0.2;
+      r = 80 + 80 * s; g = 30 + 40 * s; b = 10 + 15 * s;
+    } else if (t < 0.4) { // burnt sienna -> burnt orange
+      const s = (t - 0.2) / 0.2;
+      r = 160 + 50 * s; g = 70 + 50 * s; b = 25 + 10 * s;
+    } else if (t < 0.6) { // burnt orange -> sandy gold
+      const s = (t - 0.4) / 0.2;
+      r = 210 + 30 * s; g = 120 + 70 * s; b = 35 + 60 * s;
+    } else if (t < 0.8) { // sandy gold -> warm tan
+      const s = (t - 0.6) / 0.2;
+      r = 240 + 15 * s; g = 190 + 35 * s; b = 95 + 55 * s;
+    } else {               // warm tan -> cream white
+      const s = (t - 0.8) / 0.2;
+      r = 255; g = 225 + 30 * s; b = 150 + 70 * s;
+    }
+    desertPalette.push("rgb(" + (r|0) + "," + (g|0) + "," + (b|0) + ")");
+  }
+}
+buildDesertPalette();
+
 // Static blue shades - one per particle, assigned at init
-let colorMode = "velocity"; // "velocity" or "static"
+let colorMode = "velocity"; // "velocity", "static", or "desert"
 let brightMode = "dynamic"; // "dynamic" or "full"
 const staticColors = new Uint8Array(NUM_PARTICLES);
 function assignStaticColors() {
@@ -614,7 +641,7 @@ function simulate() {
 
 // --- Rendering ---
 function render() {
-  ctx.fillStyle = "#0a0a14";
+  ctx.fillStyle = colorMode === "desert" ? "#14100a" : "#0a0a14";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
   ctx.lineWidth = 1.0;
@@ -623,7 +650,8 @@ function render() {
 
   if (useBright) {
     // Full brightness: single uniform color, no velocity mapping
-    ctx.strokeStyle = colorMode === "velocity" ? "rgb(200,220,255)" : "rgb(140,200,255)";
+    var brightColors = { velocity: "rgb(200,220,255)", static: "rgb(140,200,255)", desert: "rgb(230,190,120)" };
+    ctx.strokeStyle = brightColors[colorMode] || "rgb(200,220,255)";
     ctx.beginPath();
     for (let ip = 0; ip < NUM_PARTICLES; ip++) {
       const x = px_pos[ip] * scaleX;
@@ -634,8 +662,9 @@ function render() {
       ctx.lineTo(x - dx, y - dy);
     }
     ctx.stroke();
-  } else if (colorMode === "velocity") {
+  } else if (colorMode === "velocity" || colorMode === "desert") {
     // Velocity-mapped colors (dynamic brightness)
+    const pal = colorMode === "desert" ? desertPalette : palette;
     const BUCKETS = 32;
     const buckets = new Array(BUCKETS);
     for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
@@ -653,7 +682,7 @@ function render() {
       const list = buckets[b];
       if (list.length === 0) continue;
       const ci = ((b + 0.5) / BUCKETS * 256) | 0;
-      ctx.strokeStyle = palette[Math.min(ci, 255)];
+      ctx.strokeStyle = pal[Math.min(ci, 255)];
       ctx.beginPath();
       for (let k = 0; k < list.length; k++) {
         const ip = list[k];
@@ -906,9 +935,12 @@ document.getElementById("startBtn").addEventListener("click", async function() {
 });
 
 // --- Color mode toggle ---
+var colorModes = ["velocity", "static", "desert"];
+var colorLabels = { velocity: "velocity", static: "ocean", desert: "desert" };
 function toggleColor() {
-  colorMode = colorMode === "velocity" ? "static" : "velocity";
-  document.getElementById("colorBtn").textContent = "Color: " + (colorMode === "velocity" ? "velocity" : "ocean");
+  var idx = colorModes.indexOf(colorMode);
+  colorMode = colorModes[(idx + 1) % colorModes.length];
+  document.getElementById("colorBtn").textContent = "Color: " + colorLabels[colorMode];
 }
 document.getElementById("colorBtn").addEventListener("touchend", function(e) {
   e.preventDefault();
