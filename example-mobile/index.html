@@ -37,6 +37,14 @@ canvas {
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 #startBtn:active { background: #1976D2; }
+#colorBtn {
+  position: fixed; bottom: 12px; right: 12px;
+  background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.25); border-radius: 20px;
+  padding: 8px 16px; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: pointer; z-index: 6; -webkit-tap-highlight-color: transparent;
+}
+#colorBtn:active { background: rgba(255,255,255,0.25); }
 #hud {
   position: fixed; top: 8px; left: 8px;
   color: rgba(255,255,255,0.5); font-family: monospace; font-size: 11px;
@@ -54,6 +62,7 @@ canvas {
 <canvas id="c"></canvas>
 <div id="shake-flash"></div>
 <div id="hud"></div>
+<button id="colorBtn" style="display:none">Color: velocity</button>
 <div id="overlay">
   <h1>MPM Fluid Simulation</h1>
   <p>Tilt your phone to change gravity direction. Shake to disturb the fluid. Touch and drag to push particles.</p>
@@ -110,6 +119,24 @@ function buildPalette() {
   }
 }
 buildPalette();
+
+// Static blue shades - one per particle, assigned at init
+let colorMode = "velocity"; // "velocity" or "static"
+const staticColors = new Uint8Array(NUM_PARTICLES);
+function assignStaticColors() {
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    // Tight range of blues: rgb(80-160, 140-200, 220-255)
+    staticColors[i] = (Math.random() * 64) | 0; // 0..63 index
+  }
+}
+const staticPalette = [];
+for (let i = 0; i < 64; i++) {
+  const t = i / 63;
+  const r = 80 + 80 * t | 0;
+  const g = 140 + 60 * t | 0;
+  const b = 220 + 35 * t | 0;
+  staticPalette.push("rgba(" + r + "," + g + "," + b + ",0.8)");
+}
 
 // Touch state
 let touchActive = false;
@@ -568,39 +595,58 @@ function render() {
   ctx.fillStyle = "rgba(6,4,16,0.35)";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  // Batch particles by color bucket for fewer state changes
-  // Use 16 buckets across the palette
-  const BUCKETS = 32;
-  const buckets = new Array(BUCKETS);
-  for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
-
-  for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-    const uv = pu_vel[ip];
-    const vv = pv_vel[ip];
-    const speed = Math.sqrt(uv * uv + vv * vv);
-    // Map speed 0..0.5 -> palette index 0..255
-    const ci = Math.min(255, (speed * 512) | 0);
-    const bucket = (ci * BUCKETS / 256) | 0;
-    buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
-  }
-
   ctx.lineWidth = 1.4;
-  for (let b = 0; b < BUCKETS; b++) {
-    const list = buckets[b];
-    if (list.length === 0) continue;
-    const ci = ((b + 0.5) / BUCKETS * 256) | 0;
-    ctx.strokeStyle = palette[Math.min(ci, 255)];
-    ctx.beginPath();
-    for (let k = 0; k < list.length; k++) {
-      const ip = list[k];
-      const x = px_pos[ip] * scaleX;
-      const y = py_pos[ip] * scaleY;
-      const dx = pu_vel[ip] * scaleX * 2;
-      const dy = pv_vel[ip] * scaleY * 2;
-      ctx.moveTo(x, y);
-      ctx.lineTo(x - dx, y - dy);
+
+  if (colorMode === "velocity") {
+    // Batch particles by velocity color bucket
+    const BUCKETS = 32;
+    const buckets = new Array(BUCKETS);
+    for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
+
+    for (let ip = 0; ip < NUM_PARTICLES; ip++) {
+      const uv = pu_vel[ip];
+      const vv = pv_vel[ip];
+      const speed = Math.sqrt(uv * uv + vv * vv);
+      const ci = Math.min(255, (speed * 512) | 0);
+      const bucket = (ci * BUCKETS / 256) | 0;
+      buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
     }
-    ctx.stroke();
+
+    for (let b = 0; b < BUCKETS; b++) {
+      const list = buckets[b];
+      if (list.length === 0) continue;
+      const ci = ((b + 0.5) / BUCKETS * 256) | 0;
+      ctx.strokeStyle = palette[Math.min(ci, 255)];
+      ctx.beginPath();
+      for (let k = 0; k < list.length; k++) {
+        const ip = list[k];
+        const x = px_pos[ip] * scaleX;
+        const y = py_pos[ip] * scaleY;
+        const dx = pu_vel[ip] * scaleX * 2;
+        const dy = pv_vel[ip] * scaleY * 2;
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - dx, y - dy);
+      }
+      ctx.stroke();
+    }
+  } else {
+    // Static blue: batch by the 64 shade buckets
+    for (let s = 0; s < 64; s++) {
+      ctx.strokeStyle = staticPalette[s];
+      ctx.beginPath();
+      let any = false;
+      for (let ip = 0; ip < NUM_PARTICLES; ip++) {
+        if (staticColors[ip] !== s) continue;
+        any = true;
+        const x = px_pos[ip] * scaleX;
+        const y = py_pos[ip] * scaleY;
+        const dx = pu_vel[ip] * scaleX * 2;
+        const dy = pv_vel[ip] * scaleY * 2;
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - dx, y - dy);
+      }
+      if (any) ctx.stroke();
+    }
   }
 
   // Gravity direction indicator (small dot + line, no circle)
@@ -810,12 +856,21 @@ document.getElementById("startBtn").addEventListener("click", async function() {
 
   resize();
   initParticles();
+  assignStaticColors();
+
+  document.getElementById("colorBtn").style.display = "block";
 
   await enableSensors();
 
   running = true;
   lastFpsTime = performance.now();
   requestAnimationFrame(loop);
+});
+
+// --- Color mode toggle ---
+document.getElementById("colorBtn").addEventListener("click", function() {
+  colorMode = colorMode === "velocity" ? "static" : "velocity";
+  this.textContent = "Color: " + (colorMode === "velocity" ? "velocity" : "ocean");
 });
 </script>
 </body>
