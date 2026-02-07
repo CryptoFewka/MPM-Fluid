@@ -591,11 +591,10 @@ function simulate() {
 
 // --- Rendering ---
 function render() {
-  // Slight fade for motion trails instead of full clear
-  ctx.fillStyle = "rgba(6,4,16,0.35)";
+  ctx.fillStyle = "#0a0a14";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  ctx.lineWidth = 1.4;
+  ctx.lineWidth = 1.0;
 
   if (colorMode === "velocity") {
     // Batch particles by velocity color bucket
