@@ -312,6 +312,10 @@ const pT11 = new Float32Array(MAX_PARTICLES);
 const pcx = new Int32Array(MAX_PARTICLES);
 const pcy = new Int32Array(MAX_PARTICLES);
 
+// Per-particle mass (heavier sets sink, lighter float)
+const pMass = new Float32Array(MAX_PARTICLES);
+const setMass = [1.0, 2.0, 3.0]; // each spawn is denser
+
 // Basis function values per particle (3 each)
 const ppx0 = new Float32Array(MAX_PARTICLES);
 const ppx1 = new Float32Array(MAX_PARTICLES);
@@ -339,12 +343,14 @@ function initParticles() {
     pT01[i] = 0;
     pT11[i] = 0;
     particleSet[i] = 0;
+    pMass[i] = setMass[0];
   }
 }
 
 function spawnParticles() {
   if (numParticles + BATCH_SIZE > MAX_PARTICLES) return; // at capacity
   const setId = numSets;
+  const mass = setMass[Math.min(setId, setMass.length - 1)];
   const start = numParticles;
   const end = start + BATCH_SIZE;
   for (let i = start; i < end; i++) {
@@ -358,6 +364,7 @@ function spawnParticles() {
     pT01[i] = 0;
     pT11[i] = 0;
     particleSet[i] = setId;
+    pMass[i] = mass;
   }
   assignStaticColors(start, end);
   numParticles = end;
@@ -412,6 +419,7 @@ function simulate() {
     const pvv = pv_vel[ip];
     ppu[ip] = puv;
     ppv[ip] = pvv;
+    const mass = pMass[ip];
 
     // Compute basis functions
     let x = cx - pxv;
@@ -453,11 +461,12 @@ function simulate() {
           activeIdx[numActiveNodes++] = n;
         }
         const phi = pxi * bpyArr[j];
-        gm[n]  += phi;
-        ggx[n] += gxi * bpyArr[j];
-        ggy[n] += pxi * bgyArr[j];
-        gu[n]  += phi * puv;
-        gv[n]  += phi * pvv;
+        const phim = phi * mass;
+        gm[n]  += phim;
+        ggx[n] += gxi * bpyArr[j] * mass;
+        ggy[n] += pxi * bgyArr[j] * mass;
+        gu[n]  += phim * puv;
+        gv[n]  += phim * pvv;
       }
     }
   }
@@ -687,16 +696,17 @@ function simulate() {
       pv_vel[ip] += bottomEdge - yf - Math.random() * WALL_BOUNCE_RAND;
     }
 
-    // Transfer velocity back to grid
+    // Transfer velocity back to grid (mass-weighted momentum)
     const puv = pu_vel[ip];
     const pvv = pv_vel[ip];
+    const mass = pMass[ip];
     for (let i = 0; i < 3; i++) {
       const ppxi = bpxArr[i];
       for (let j = 0; j < 3; j++) {
         const n = (cx + i) * GH + (cy + j);
-        const phi = ppxi * bpyArr[j];
-        gu[n] += phi * puv;
-        gv[n] += phi * pvv;
+        const phim = ppxi * bpyArr[j] * mass;
+        gu[n] += phim * puv;
+        gv[n] += phim * pvv;
       }
     }
   }
