@@ -692,19 +692,20 @@ function simulate() {
     pu_vel[ip] += pu;
     pv_vel[ip] += pv;
 
-    // Wall collisions with randomness
+    // Wall collisions: reflect velocity for bounce
+    const WALL_RESTITUTION = 0.5;
     const xf = px_pos[ip] + pu_vel[ip];
     const yf = py_pos[ip] + pv_vel[ip];
 
     if (xf < 2) {
-      pu_vel[ip] += (2 - xf) + Math.random() * WALL_BOUNCE_RAND;
+      pu_vel[ip] = Math.abs(pu_vel[ip]) * WALL_RESTITUTION + Math.random() * WALL_BOUNCE_RAND;
     } else if (xf > rightEdge) {
-      pu_vel[ip] += rightEdge - xf - Math.random() * WALL_BOUNCE_RAND;
+      pu_vel[ip] = -Math.abs(pu_vel[ip]) * WALL_RESTITUTION - Math.random() * WALL_BOUNCE_RAND;
     }
     if (yf < 2) {
-      pv_vel[ip] += (2 - yf) + Math.random() * WALL_BOUNCE_RAND;
+      pv_vel[ip] = Math.abs(pv_vel[ip]) * WALL_RESTITUTION + Math.random() * WALL_BOUNCE_RAND;
     } else if (yf > bottomEdge) {
-      pv_vel[ip] += bottomEdge - yf - Math.random() * WALL_BOUNCE_RAND;
+      pv_vel[ip] = -Math.abs(pv_vel[ip]) * WALL_RESTITUTION - Math.random() * WALL_BOUNCE_RAND;
     }
 
     // Transfer velocity back to grid (mass-weighted momentum)
