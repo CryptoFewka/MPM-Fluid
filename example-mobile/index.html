@@ -281,6 +281,11 @@ let shakeImpulse = 0;
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 let canvasW, canvasH, scaleX, scaleY;
+// Particle-accessible region (walls clamp to [WALL_MIN, *_MAX])
+const WALL_MIN_X = 2, WALL_MAX_X = GRID_W - 3;
+const WALL_MIN_Y = 2, WALL_MAX_Y = GRID_H - 3;
+const VIEW_W = WALL_MAX_X - WALL_MIN_X;
+const VIEW_H = WALL_MAX_Y - WALL_MIN_Y;
 
 // --- Node class (flat arrays for performance) ---
 // Grid stored as flat Float32Arrays
@@ -778,8 +783,8 @@ function render() {
       ctx.beginPath();
       for (let ip = 0; ip < NP; ip++) {
         if (particleSet[ip] !== sid) continue;
-        const x = px_pos[ip] * scaleX;
-        const y = py_pos[ip] * scaleY;
+        const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
+        const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
         const uv = pu_vel[ip];
         const vv = pv_vel[ip];
         const speed = Math.sqrt(uv * uv + vv * vv);
@@ -827,8 +832,8 @@ function render() {
         ctx.beginPath();
         for (let k = 0; k < list.length; k++) {
           const ip = list[k];
-          const x = px_pos[ip] * scaleX;
-          const y = py_pos[ip] * scaleY;
+          const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
+          const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
           const dx = pu_vel[ip] * scaleX * 2;
           const dy = pv_vel[ip] * scaleY * 2;
           ctx.moveTo(x, y);
@@ -848,8 +853,8 @@ function render() {
         for (let ip = 0; ip < NP; ip++) {
           if (particleSet[ip] !== sid || staticColors[ip] !== s) continue;
           any = true;
-          const x = px_pos[ip] * scaleX;
-          const y = py_pos[ip] * scaleY;
+          const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
+          const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
           const dx = pu_vel[ip] * scaleX * 2;
           const dy = pv_vel[ip] * scaleY * 2;
           ctx.moveTo(x, y);
@@ -891,8 +896,8 @@ function resize() {
   canvas.style.width = canvasW + "px";
   canvas.style.height = canvasH + "px";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  scaleX = canvasW / GRID_W;
-  scaleY = canvasH / GRID_H;
+  scaleX = canvasW / VIEW_W;
+  scaleY = canvasH / VIEW_H;
 }
 window.addEventListener("resize", resize);
 
@@ -901,8 +906,8 @@ window.addEventListener("resize", resize);
 canvas.addEventListener("touchstart", function(e) {
   e.preventDefault();
   const t = e.touches[0];
-  touchX = t.clientX / scaleX;
-  touchY = t.clientY / scaleY;
+  touchX = t.clientX / scaleX + WALL_MIN_X;
+  touchY = t.clientY / scaleY + WALL_MIN_Y;
   prevTouchX = touchX;
   prevTouchY = touchY;
   touchActive = true;
@@ -913,8 +918,8 @@ canvas.addEventListener("touchmove", function(e) {
   const t = e.touches[0];
   prevTouchX = touchX;
   prevTouchY = touchY;
-  touchX = t.clientX / scaleX;
-  touchY = t.clientY / scaleY;
+  touchX = t.clientX / scaleX + WALL_MIN_X;
+  touchY = t.clientY / scaleY + WALL_MIN_Y;
 }, { passive: false });
 
 canvas.addEventListener("touchend", function(e) {
@@ -928,8 +933,8 @@ canvas.addEventListener("touchcancel", function(e) {
 
 // Mouse fallback for desktop testing
 canvas.addEventListener("mousedown", function(e) {
-  touchX = e.clientX / scaleX;
-  touchY = e.clientY / scaleY;
+  touchX = e.clientX / scaleX + WALL_MIN_X;
+  touchY = e.clientY / scaleY + WALL_MIN_Y;
   prevTouchX = touchX;
   prevTouchY = touchY;
   touchActive = true;
@@ -938,8 +943,8 @@ canvas.addEventListener("mousemove", function(e) {
   if (!touchActive) return;
   prevTouchX = touchX;
   prevTouchY = touchY;
-  touchX = e.clientX / scaleX;
-  touchY = e.clientY / scaleY;
+  touchX = e.clientX / scaleX + WALL_MIN_X;
+  touchY = e.clientY / scaleY + WALL_MIN_Y;
 });
 canvas.addEventListener("mouseup", function() { touchActive = false; });
 
