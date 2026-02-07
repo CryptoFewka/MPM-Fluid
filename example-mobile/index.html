@@ -73,7 +73,7 @@ canvas {
 <canvas id="c"></canvas>
 <div id="shake-flash"></div>
 <div id="hud"></div>
-<button id="brightBtn" class="ctrl-btn" style="display:none">Bright: dynamic</button>
+<button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
 <button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
 <button id="reloadBtn" style="display:none">Update Available - Reload</button>
 <div id="overlay">
@@ -955,7 +955,7 @@ document.getElementById("colorBtn").addEventListener("click", function(e) {
 // --- Brightness mode toggle ---
 function toggleBright() {
   brightMode = brightMode === "dynamic" ? "full" : "dynamic";
-  document.getElementById("brightBtn").textContent = "Bright: " + brightMode;
+  document.getElementById("brightBtn").textContent = "Vel dim: " + (brightMode === "dynamic" ? "on" : "off");
 }
 document.getElementById("brightBtn").addEventListener("touchend", function(e) {
   e.preventDefault();
