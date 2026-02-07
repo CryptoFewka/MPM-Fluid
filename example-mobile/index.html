@@ -649,15 +649,28 @@ function render() {
   const useBright = brightMode === "full";
 
   if (useBright) {
-    // Full brightness: single uniform color, no velocity mapping
+    // Full brightness: uniform color AND fixed-length strokes
+    // Without fixed length, slow particles produce tiny invisible strokes (geometric dimming)
     var brightColors = { velocity: "rgb(200,220,255)", static: "rgb(140,200,255)", desert: "rgb(230,190,120)" };
     ctx.strokeStyle = brightColors[colorMode] || "rgb(200,220,255)";
+    const fixedLen = 2.0; // fixed stroke length in grid units
     ctx.beginPath();
     for (let ip = 0; ip < NUM_PARTICLES; ip++) {
       const x = px_pos[ip] * scaleX;
       const y = py_pos[ip] * scaleY;
-      const dx = pu_vel[ip] * scaleX * 2;
-      const dy = pv_vel[ip] * scaleY * 2;
+      const uv = pu_vel[ip];
+      const vv = pv_vel[ip];
+      const speed = Math.sqrt(uv * uv + vv * vv);
+      let dx, dy;
+      if (speed > 0.001) {
+        // Fixed length in velocity direction
+        dx = (uv / speed) * fixedLen * scaleX;
+        dy = (vv / speed) * fixedLen * scaleY;
+      } else {
+        // Near-zero velocity: small vertical tick
+        dx = 0;
+        dy = fixedLen * scaleY;
+      }
       ctx.moveTo(x, y);
       ctx.lineTo(x - dx, y - dy);
     }
@@ -934,45 +947,38 @@ document.getElementById("startBtn").addEventListener("click", async function() {
   requestAnimationFrame(loop);
 });
 
+// --- Button helper: debounced handler prevents touchend+click double-fire ---
+function onTap(el, fn) {
+  var last = 0;
+  function guard(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var now = Date.now();
+    if (now - last < 300) return; // debounce 300ms
+    last = now;
+    fn();
+  }
+  el.addEventListener("touchend", guard, { passive: false });
+  el.addEventListener("click", guard);
+}
+
 // --- Color mode toggle ---
 var colorModes = ["velocity", "static", "desert"];
 var colorLabels = { velocity: "velocity", static: "ocean", desert: "desert" };
-function toggleColor() {
+onTap(document.getElementById("colorBtn"), function() {
   var idx = colorModes.indexOf(colorMode);
   colorMode = colorModes[(idx + 1) % colorModes.length];
   document.getElementById("colorBtn").textContent = "Color: " + colorLabels[colorMode];
-}
-document.getElementById("colorBtn").addEventListener("touchend", function(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  toggleColor();
-}, { passive: false });
-document.getElementById("colorBtn").addEventListener("click", function(e) {
-  e.stopPropagation();
-  toggleColor();
 });
 
 // --- Brightness mode toggle ---
-function toggleBright() {
+onTap(document.getElementById("brightBtn"), function() {
   brightMode = brightMode === "dynamic" ? "full" : "dynamic";
   document.getElementById("brightBtn").textContent = "Vel dim: " + (brightMode === "dynamic" ? "on" : "off");
-}
-document.getElementById("brightBtn").addEventListener("touchend", function(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  toggleBright();
-}, { passive: false });
-document.getElementById("brightBtn").addEventListener("click", function(e) {
-  e.stopPropagation();
-  toggleBright();
 });
 
 // --- Reload button ---
-document.getElementById("reloadBtn").addEventListener("touchend", function(e) {
-  e.preventDefault();
-  window.location.reload();
-}, { passive: false });
-document.getElementById("reloadBtn").addEventListener("click", function() {
+onTap(document.getElementById("reloadBtn"), function() {
   window.location.reload();
 });
 
