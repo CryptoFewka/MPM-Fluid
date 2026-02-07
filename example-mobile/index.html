@@ -110,11 +110,7 @@ let numSets = 1;
 // --- Simulation state ---
 let particles, grid, activeNodes, numActiveNodes;
 let gravityX = 0.0, gravityY = 0.005;
-let prevGravityX = 0.0, prevGravityY = 0.005;
-let inertiaX = 0.0, inertiaY = 0.0;
-const INERTIA_STRENGTH = 21.0; // how strongly the fluid resists coordinate rotation
-const INERTIA_DECAY = 0.65;    // how quickly the inertial impulse fades
-let linAccelX = 0.0, linAccelY = 0.0; // linear acceleration pseudo-force
+let linAccelX = 0.0, linAccelY = 0.0; // linear acceleration pseudo-force (translation)
 const LIN_ACCEL_STRENGTH = 0.0004; // scale device m/s² to grid accel
 let spinRate = 0.0; // Z-axis rotation rate (deg/s from rotationRate.alpha)
 const SPIN_STRENGTH = 0.00004; // scale rotation rate to tangential grid force
@@ -405,16 +401,6 @@ function idx(i, j) {
 function simulate() {
   clearGrid();
 
-  // Compute inertial impulse from gravity vector change
-  // When the phone tilts, gravity changes direction in screen space.
-  // The fluid should resist this rotation (it has inertia in world space).
-  const dgx = gravityX - prevGravityX;
-  const dgy = gravityY - prevGravityY;
-  inertiaX = inertiaX * INERTIA_DECAY - dgx * INERTIA_STRENGTH;
-  inertiaY = inertiaY * INERTIA_DECAY - dgy * INERTIA_STRENGTH;
-  prevGravityX = gravityX;
-  prevGravityY = gravityY;
-
   const GW = GRID_W;
   const GH = GRID_H;
   const NP = numParticles;
@@ -669,10 +655,6 @@ function simulate() {
     const mass = pMass[ip];
     pu += gravityX * mass;
     pv += gravityY * mass;
-
-    // Apply inertial counter-force (fluid resists phone rotation)
-    pu += inertiaX;
-    pv += inertiaY;
 
     // Apply linear acceleration pseudo-force (phone moving through space)
     pu += linAccelX;
@@ -981,17 +963,18 @@ function handleOrientation(e) {
   orientBeta = e.beta || 0;
   orientGamma = e.gamma || 0;
 
-  // Convert tilt angles to gravity vector
-  // gamma controls X gravity (tilt left/right)
-  // beta controls Y gravity (tilt forward/back)
-  const GRAVITY_SCALE = 0.005;
-  const MAX_ANGLE = 60; // clamp angles
+  // Convert tilt angles to gravity vector using proper trigonometric projection.
+  // Real gravity component on a tilted surface = g * sin(angle).
+  // gamma controls X gravity (tilt left/right), beta controls Y (tilt forward/back).
+  const GRAVITY_MAG = 0.005;
+  const DEG2RAD = Math.PI / 180;
+  const MAX_ANGLE = 80; // clamp before sin() to avoid full 90° snap
 
   const clampedGamma = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientGamma));
   const clampedBeta = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientBeta));
 
-  gravityX = (clampedGamma / MAX_ANGLE) * GRAVITY_SCALE;
-  gravityY = (clampedBeta / MAX_ANGLE) * GRAVITY_SCALE;
+  gravityX = Math.sin(clampedGamma * DEG2RAD) * GRAVITY_MAG;
+  gravityY = Math.sin(clampedBeta * DEG2RAD) * GRAVITY_MAG;
 }
 
 
