@@ -654,6 +654,7 @@ function render() {
     var brightColors = { velocity: "rgb(200,220,255)", static: "rgb(140,200,255)", desert: "rgb(230,190,120)" };
     ctx.strokeStyle = brightColors[colorMode] || "rgb(200,220,255)";
     const fixedLen = 2.0; // fixed stroke length in grid units
+    const minSpeed = 0.05; // below this, direction is too noisy to normalize
     ctx.beginPath();
     for (let ip = 0; ip < NUM_PARTICLES; ip++) {
       const x = px_pos[ip] * scaleX;
@@ -662,17 +663,18 @@ function render() {
       const vv = pv_vel[ip];
       const speed = Math.sqrt(uv * uv + vv * vv);
       let dx, dy;
-      if (speed > 0.001) {
+      if (speed > minSpeed) {
         // Fixed length in velocity direction
         dx = (uv / speed) * fixedLen * scaleX;
         dy = (vv / speed) * fixedLen * scaleY;
       } else {
-        // Near-zero velocity: small vertical tick
-        dx = 0;
-        dy = fixedLen * scaleY;
+        // Slow/stuck particles: small centered dot (no directional noise)
+        const halfLen = fixedLen * 0.4;
+        dx = halfLen * scaleX;
+        dy = 0;
       }
-      ctx.moveTo(x, y);
-      ctx.lineTo(x - dx, y - dy);
+      ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
+      ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
     }
     ctx.stroke();
   } else if (colorMode === "velocity" || colorMode === "desert") {
