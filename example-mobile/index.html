@@ -47,6 +47,7 @@ canvas {
 .ctrl-btn:active { background: rgba(255,255,255,0.25); }
 #colorBtn { right: 12px; }
 #brightBtn { right: 140px; }
+#spawnBtn { left: 12px; }
 #reloadBtn {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   background: #2196F3; color: #fff; border: none; border-radius: 28px;
@@ -73,6 +74,7 @@ canvas {
 <canvas id="c"></canvas>
 <div id="shake-flash"></div>
 <div id="hud"></div>
+<button id="spawnBtn" class="ctrl-btn" style="display:none">Spawn</button>
 <button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
 <button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
 <button id="reloadBtn" style="display:none">Update Available - Reload</button>
@@ -97,8 +99,11 @@ if ("serviceWorker" in navigator) {
 // --- Configuration ---
 const GRID_W = 100;
 const GRID_H = 75;
-const NUM_PARTICLES = 8000;
+const BATCH_SIZE = 8000;
+const MAX_PARTICLES = 24000; // up to 3 spawns
 const WALL_BOUNCE_RAND = 0.03;
+let numParticles = BATCH_SIZE;
+let numSets = 1;
 
 // --- Simulation state ---
 let particles, grid, activeNodes, numActiveNodes;
@@ -169,23 +174,94 @@ function buildDesertPalette() {
 }
 buildDesertPalette();
 
-// Static blue shades - one per particle, assigned at init
-let colorMode = "velocity"; // "velocity", "static", or "desert"
-let brightMode = "dynamic"; // "dynamic" or "full"
-const staticColors = new Uint8Array(NUM_PARTICLES);
-function assignStaticColors() {
-  for (let i = 0; i < NUM_PARTICLES; i++) {
-    // Tight range of blues: rgb(80-160, 140-200, 220-255)
-    staticColors[i] = (Math.random() * 64) | 0; // 0..63 index
+// Magenta/violet palette: velocity-mapped
+const magentaPalette = [];
+function buildMagentaPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {
+      const s = t / 0.2;
+      r = 60 + 100 * s; g = 20 + 20 * s; b = 100 + 80 * s;
+    } else if (t < 0.4) {
+      const s = (t - 0.2) / 0.2;
+      r = 160 + 60 * s; g = 40 + 20 * s; b = 180 + 40 * s;
+    } else if (t < 0.6) {
+      const s = (t - 0.4) / 0.2;
+      r = 220 + 35 * s; g = 60 + 60 * s; b = 220 - 20 * s;
+    } else if (t < 0.8) {
+      const s = (t - 0.6) / 0.2;
+      r = 255; g = 120 + 80 * s; b = 200 - 40 * s;
+    } else {
+      const s = (t - 0.8) / 0.2;
+      r = 255; g = 200 + 55 * s; b = 160 + 95 * s;
+    }
+    magentaPalette.push("rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")");
   }
 }
-const staticPalette = [];
-for (let i = 0; i < 64; i++) {
-  const t = i / 63;
-  const r = 80 + 80 * t | 0;
-  const g = 140 + 60 * t | 0;
-  const b = 220 + 35 * t | 0;
-  staticPalette.push("rgba(" + r + "," + g + "," + b + ",0.8)");
+buildMagentaPalette();
+
+// Emerald/green palette: velocity-mapped
+const emeraldPalette = [];
+function buildEmeraldPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {
+      const s = t / 0.2;
+      r = 10 + 30 * s; g = 60 + 80 * s; b = 30 + 40 * s;
+    } else if (t < 0.4) {
+      const s = (t - 0.2) / 0.2;
+      r = 40 + 30 * s; g = 140 + 60 * s; b = 70 + 30 * s;
+    } else if (t < 0.6) {
+      const s = (t - 0.4) / 0.2;
+      r = 70 + 80 * s; g = 200 + 40 * s; b = 100 - 20 * s;
+    } else if (t < 0.8) {
+      const s = (t - 0.6) / 0.2;
+      r = 150 + 70 * s; g = 240 + 15 * s; b = 80 + 60 * s;
+    } else {
+      const s = (t - 0.8) / 0.2;
+      r = 220 + 35 * s; g = 255; b = 140 + 80 * s;
+    }
+    emeraldPalette.push("rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")");
+  }
+}
+buildEmeraldPalette();
+
+// Per-set palette arrays (indexed by set ID)
+const setVelPalettes = [palette, magentaPalette, emeraldPalette];
+const setDesertPalettes = [desertPalette, magentaPalette, emeraldPalette];
+const setBrightColors = ["rgb(200,220,255)", "rgb(255,160,220)", "rgb(140,255,180)"];
+const setBrightOcean = ["rgb(140,200,255)", "rgb(220,140,255)", "rgb(140,255,200)"];
+const setBrightDesert = ["rgb(230,190,120)", "rgb(255,160,220)", "rgb(140,255,180)"];
+
+// Static shades per set (64 each)
+let colorMode = "velocity"; // "velocity", "static", or "desert"
+let brightMode = "dynamic"; // "dynamic" or "full"
+const staticColors = new Uint8Array(MAX_PARTICLES);
+const particleSet = new Uint8Array(MAX_PARTICLES);
+
+function buildStaticPalette64(rMin, rMax, gMin, gMax, bMin, bMax) {
+  const pal = [];
+  for (let i = 0; i < 64; i++) {
+    const t = i / 63;
+    const r = rMin + (rMax - rMin) * t | 0;
+    const g = gMin + (gMax - gMin) * t | 0;
+    const b = bMin + (bMax - bMin) * t | 0;
+    pal.push("rgba(" + r + "," + g + "," + b + ",0.8)");
+  }
+  return pal;
+}
+const setStaticPalettes = [
+  buildStaticPalette64(80, 160, 140, 200, 220, 255),   // blue shades
+  buildStaticPalette64(180, 255, 80, 160, 180, 255),    // magenta shades
+  buildStaticPalette64(80, 160, 200, 255, 120, 180)     // green shades
+];
+
+function assignStaticColors(start, end) {
+  for (let i = start; i < end; i++) {
+    staticColors[i] = (Math.random() * 64) | 0;
+  }
 }
 
 // Touch state
@@ -222,37 +298,37 @@ const gActive = new Uint8Array(GRID_SIZE);
 const activeIdx = new Int32Array(GRID_SIZE);
 
 // --- Particle arrays (struct of arrays for performance) ---
-const px_pos = new Float32Array(NUM_PARTICLES);
-const py_pos = new Float32Array(NUM_PARTICLES);
-const pu_vel = new Float32Array(NUM_PARTICLES);
-const pv_vel = new Float32Array(NUM_PARTICLES);
-const ppu = new Float32Array(NUM_PARTICLES);
-const ppv = new Float32Array(NUM_PARTICLES);
+const px_pos = new Float32Array(MAX_PARTICLES);
+const py_pos = new Float32Array(MAX_PARTICLES);
+const pu_vel = new Float32Array(MAX_PARTICLES);
+const pv_vel = new Float32Array(MAX_PARTICLES);
+const ppu = new Float32Array(MAX_PARTICLES);
+const ppv = new Float32Array(MAX_PARTICLES);
 
-const pT00 = new Float32Array(NUM_PARTICLES);
-const pT01 = new Float32Array(NUM_PARTICLES);
-const pT11 = new Float32Array(NUM_PARTICLES);
+const pT00 = new Float32Array(MAX_PARTICLES);
+const pT01 = new Float32Array(MAX_PARTICLES);
+const pT11 = new Float32Array(MAX_PARTICLES);
 
-const pcx = new Int32Array(NUM_PARTICLES);
-const pcy = new Int32Array(NUM_PARTICLES);
+const pcx = new Int32Array(MAX_PARTICLES);
+const pcy = new Int32Array(MAX_PARTICLES);
 
 // Basis function values per particle (3 each)
-const ppx0 = new Float32Array(NUM_PARTICLES);
-const ppx1 = new Float32Array(NUM_PARTICLES);
-const ppx2 = new Float32Array(NUM_PARTICLES);
-const ppy0 = new Float32Array(NUM_PARTICLES);
-const ppy1 = new Float32Array(NUM_PARTICLES);
-const ppy2 = new Float32Array(NUM_PARTICLES);
-const pgx0 = new Float32Array(NUM_PARTICLES);
-const pgx1 = new Float32Array(NUM_PARTICLES);
-const pgx2 = new Float32Array(NUM_PARTICLES);
-const pgy0 = new Float32Array(NUM_PARTICLES);
-const pgy1 = new Float32Array(NUM_PARTICLES);
-const pgy2 = new Float32Array(NUM_PARTICLES);
+const ppx0 = new Float32Array(MAX_PARTICLES);
+const ppx1 = new Float32Array(MAX_PARTICLES);
+const ppx2 = new Float32Array(MAX_PARTICLES);
+const ppy0 = new Float32Array(MAX_PARTICLES);
+const ppy1 = new Float32Array(MAX_PARTICLES);
+const ppy2 = new Float32Array(MAX_PARTICLES);
+const pgx0 = new Float32Array(MAX_PARTICLES);
+const pgx1 = new Float32Array(MAX_PARTICLES);
+const pgx2 = new Float32Array(MAX_PARTICLES);
+const pgy0 = new Float32Array(MAX_PARTICLES);
+const pgy1 = new Float32Array(MAX_PARTICLES);
+const pgy2 = new Float32Array(MAX_PARTICLES);
 
 
 function initParticles() {
-  for (let i = 0; i < NUM_PARTICLES; i++) {
+  for (let i = 0; i < BATCH_SIZE; i++) {
     px_pos[i] = 5 + Math.random() * (GRID_W - 10);
     py_pos[i] = 5 + Math.random() * (GRID_H / 4);
     pu_vel[i] = 0;
@@ -262,6 +338,33 @@ function initParticles() {
     pT00[i] = 0;
     pT01[i] = 0;
     pT11[i] = 0;
+    particleSet[i] = 0;
+  }
+}
+
+function spawnParticles() {
+  if (numParticles + BATCH_SIZE > MAX_PARTICLES) return; // at capacity
+  const setId = numSets;
+  const start = numParticles;
+  const end = start + BATCH_SIZE;
+  for (let i = start; i < end; i++) {
+    px_pos[i] = 5 + Math.random() * (GRID_W - 10);
+    py_pos[i] = 5 + Math.random() * (GRID_H / 4);
+    pu_vel[i] = 0;
+    pv_vel[i] = 0;
+    ppu[i] = 0;
+    ppv[i] = 0;
+    pT00[i] = 0;
+    pT01[i] = 0;
+    pT11[i] = 0;
+    particleSet[i] = setId;
+  }
+  assignStaticColors(start, end);
+  numParticles = end;
+  numSets++;
+  // Update spawn button
+  if (numParticles >= MAX_PARTICLES) {
+    document.getElementById("spawnBtn").style.display = "none";
   }
 }
 
@@ -296,7 +399,7 @@ function simulate() {
 
   const GW = GRID_W;
   const GH = GRID_H;
-  const NP = NUM_PARTICLES;
+  const NP = numParticles;
 
   // ---- Pass 1: Particle to Grid ----
   for (let ip = 0; ip < NP; ip++) {
@@ -648,85 +751,96 @@ function render() {
 
   const useBright = brightMode === "full";
 
+  const NP = numParticles;
+  const NS = numSets;
+
   if (useBright) {
-    // Full brightness: uniform color AND fixed-length strokes
-    // Without fixed length, slow particles produce tiny invisible strokes (geometric dimming)
-    var brightColors = { velocity: "rgb(200,220,255)", static: "rgb(140,200,255)", desert: "rgb(230,190,120)" };
-    ctx.strokeStyle = brightColors[colorMode] || "rgb(200,220,255)";
-    const fixedLen = 2.0; // fixed stroke length in grid units
-    const minSpeed = 0.05; // below this, direction is too noisy to normalize
-    ctx.beginPath();
-    for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-      const x = px_pos[ip] * scaleX;
-      const y = py_pos[ip] * scaleY;
-      const uv = pu_vel[ip];
-      const vv = pv_vel[ip];
-      const speed = Math.sqrt(uv * uv + vv * vv);
-      let dx, dy;
-      if (speed > minSpeed) {
-        // Fixed length in velocity direction
-        dx = (uv / speed) * fixedLen * scaleX;
-        dy = (vv / speed) * fixedLen * scaleY;
-      } else {
-        // Slow/stuck particles: small centered dot (no directional noise)
-        const halfLen = fixedLen * 0.4;
-        dx = halfLen * scaleX;
-        dy = 0;
-      }
-      ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
-      ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
-    }
-    ctx.stroke();
-  } else if (colorMode === "velocity" || colorMode === "desert") {
-    // Velocity-mapped colors (dynamic brightness)
-    const pal = colorMode === "desert" ? desertPalette : palette;
-    const BUCKETS = 32;
-    const buckets = new Array(BUCKETS);
-    for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
-
-    for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-      const uv = pu_vel[ip];
-      const vv = pv_vel[ip];
-      const speed = Math.sqrt(uv * uv + vv * vv);
-      const ci = Math.min(255, (speed * 512) | 0);
-      const bucket = (ci * BUCKETS / 256) | 0;
-      buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
-    }
-
-    for (let b = 0; b < BUCKETS; b++) {
-      const list = buckets[b];
-      if (list.length === 0) continue;
-      const ci = ((b + 0.5) / BUCKETS * 256) | 0;
-      ctx.strokeStyle = pal[Math.min(ci, 255)];
+    // Full brightness: uniform color per set, fixed-length strokes
+    const fixedLen = 2.0;
+    const minSpeed = 0.05;
+    var brightLookup = colorMode === "desert" ? setBrightDesert :
+                       colorMode === "static" ? setBrightOcean : setBrightColors;
+    for (let sid = 0; sid < NS; sid++) {
+      ctx.strokeStyle = brightLookup[sid] || setBrightColors[sid] || "rgb(200,220,255)";
       ctx.beginPath();
-      for (let k = 0; k < list.length; k++) {
-        const ip = list[k];
+      for (let ip = 0; ip < NP; ip++) {
+        if (particleSet[ip] !== sid) continue;
         const x = px_pos[ip] * scaleX;
         const y = py_pos[ip] * scaleY;
-        const dx = pu_vel[ip] * scaleX * 2;
-        const dy = pv_vel[ip] * scaleY * 2;
-        ctx.moveTo(x, y);
-        ctx.lineTo(x - dx, y - dy);
+        const uv = pu_vel[ip];
+        const vv = pv_vel[ip];
+        const speed = Math.sqrt(uv * uv + vv * vv);
+        let dx, dy;
+        if (speed > minSpeed) {
+          dx = (uv / speed) * fixedLen * scaleX;
+          dy = (vv / speed) * fixedLen * scaleY;
+        } else {
+          const halfLen = fixedLen * 0.4;
+          dx = halfLen * scaleX;
+          dy = 0;
+        }
+        ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
+        ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
       }
       ctx.stroke();
     }
-  } else {
-    // Static blue shades (dynamic brightness, per-particle shade)
-    for (let s = 0; s < 64; s++) {
-      ctx.strokeStyle = staticPalette[s];
-      ctx.beginPath();
-      let any = false;
-      for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-        if (staticColors[ip] !== s) continue;
-        any = true;
-        const x = px_pos[ip] * scaleX;
-        const y = py_pos[ip] * scaleY;
-        const dx = pu_vel[ip] * scaleX * 2;
-        const dy = pv_vel[ip] * scaleY * 2;
-        ctx.moveTo(x, y);
-        ctx.lineTo(x - dx, y - dy);
+  } else if (colorMode === "velocity" || colorMode === "desert") {
+    // Velocity-mapped colors per set
+    var palLookup = colorMode === "desert" ? setDesertPalettes : setVelPalettes;
+    const BUCKETS = 32;
+    for (let sid = 0; sid < NS; sid++) {
+      const pal = palLookup[sid] || palette;
+      const buckets = new Array(BUCKETS);
+      for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
+
+      for (let ip = 0; ip < NP; ip++) {
+        if (particleSet[ip] !== sid) continue;
+        const uv = pu_vel[ip];
+        const vv = pv_vel[ip];
+        const speed = Math.sqrt(uv * uv + vv * vv);
+        const ci = Math.min(255, (speed * 512) | 0);
+        const bucket = (ci * BUCKETS / 256) | 0;
+        buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
       }
-      if (any) ctx.stroke();
+
+      for (let b = 0; b < BUCKETS; b++) {
+        const list = buckets[b];
+        if (list.length === 0) continue;
+        const ci = ((b + 0.5) / BUCKETS * 256) | 0;
+        ctx.strokeStyle = pal[Math.min(ci, 255)];
+        ctx.beginPath();
+        for (let k = 0; k < list.length; k++) {
+          const ip = list[k];
+          const x = px_pos[ip] * scaleX;
+          const y = py_pos[ip] * scaleY;
+          const dx = pu_vel[ip] * scaleX * 2;
+          const dy = pv_vel[ip] * scaleY * 2;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - dx, y - dy);
+        }
+        ctx.stroke();
+      }
+    }
+  } else {
+    // Static shades per set
+    for (let sid = 0; sid < NS; sid++) {
+      const sPal = setStaticPalettes[sid] || setStaticPalettes[0];
+      for (let s = 0; s < 64; s++) {
+        ctx.strokeStyle = sPal[s];
+        ctx.beginPath();
+        let any = false;
+        for (let ip = 0; ip < NP; ip++) {
+          if (particleSet[ip] !== sid || staticColors[ip] !== s) continue;
+          any = true;
+          const x = px_pos[ip] * scaleX;
+          const y = py_pos[ip] * scaleY;
+          const dx = pu_vel[ip] * scaleX * 2;
+          const dy = pv_vel[ip] * scaleY * 2;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - dx, y - dy);
+        }
+        if (any) ctx.stroke();
+      }
     }
   }
 
@@ -919,7 +1033,7 @@ function loop(timestamp) {
     } else {
       sensorStatus = "desktop mode";
     }
-    hud.textContent = fps + " fps | " + NUM_PARTICLES + " particles | " + sensorStatus;
+    hud.textContent = fps + " fps | " + numParticles + " particles | " + sensorStatus;
   }
 
   requestAnimationFrame(loop);
@@ -937,10 +1051,11 @@ document.getElementById("startBtn").addEventListener("click", async function() {
 
   resize();
   initParticles();
-  assignStaticColors();
+  assignStaticColors(0, BATCH_SIZE);
 
   document.getElementById("colorBtn").style.display = "block";
   document.getElementById("brightBtn").style.display = "block";
+  document.getElementById("spawnBtn").style.display = "block";
 
   await enableSensors();
 
@@ -977,6 +1092,11 @@ onTap(document.getElementById("colorBtn"), function() {
 onTap(document.getElementById("brightBtn"), function() {
   brightMode = brightMode === "dynamic" ? "full" : "dynamic";
   document.getElementById("brightBtn").textContent = "Vel dim: " + (brightMode === "dynamic" ? "on" : "off");
+});
+
+// --- Spawn button ---
+onTap(document.getElementById("spawnBtn"), function() {
+  spawnParticles();
 });
 
 // --- Reload button ---
