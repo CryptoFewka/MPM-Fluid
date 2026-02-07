@@ -48,6 +48,7 @@ canvas {
 #colorBtn { right: 12px; }
 #brightBtn { right: 140px; }
 #spawnBtn { left: 12px; }
+#resetBtn { left: 100px; }
 #reloadBtn {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   background: #2196F3; color: #fff; border: none; border-radius: 28px;
@@ -74,6 +75,7 @@ canvas {
 <canvas id="c"></canvas>
 <div id="shake-flash"></div>
 <div id="hud"></div>
+<button id="resetBtn" class="ctrl-btn" style="display:none">Reset</button>
 <button id="spawnBtn" class="ctrl-btn" style="display:none">Spawn</button>
 <button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
 <button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
@@ -108,10 +110,10 @@ let numSets = 1;
 // --- Simulation state ---
 let particles, grid, activeNodes, numActiveNodes;
 let gravityX = 0.0, gravityY = 0.005;
-let prevGravityX = 0.0, prevGravityY = 0.005;
-let inertiaX = 0.0, inertiaY = 0.0;
-const INERTIA_STRENGTH = 21.0; // how strongly the fluid resists coordinate rotation
-const INERTIA_DECAY = 0.65;    // how quickly the inertial impulse fades
+let linAccelX = 0.0, linAccelY = 0.0; // linear acceleration pseudo-force (translation)
+const LIN_ACCEL_STRENGTH = 0.0004; // scale device m/s² to grid accel
+let spinRate = 0.0; // Z-axis rotation rate (deg/s from rotationRate.alpha)
+const SPIN_STRENGTH = 0.00004; // scale rotation rate to tangential grid force
 let densitySetting = 3.5;
 let stiffness = 0.5;
 let bulkViscosity = 3.0;
@@ -281,6 +283,11 @@ let shakeImpulse = 0;
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 let canvasW, canvasH, scaleX, scaleY;
+// Particle-accessible region (walls clamp to [WALL_MIN, *_MAX])
+const WALL_MIN_X = 3, WALL_MAX_X = GRID_W - 3;
+const WALL_MIN_Y = 3, WALL_MAX_Y = GRID_H - 3;
+const VIEW_W = WALL_MAX_X - WALL_MIN_X;
+const VIEW_H = WALL_MAX_Y - WALL_MIN_Y;
 
 // --- Node class (flat arrays for performance) ---
 // Grid stored as flat Float32Arrays
@@ -312,6 +319,10 @@ const pT11 = new Float32Array(MAX_PARTICLES);
 const pcx = new Int32Array(MAX_PARTICLES);
 const pcy = new Int32Array(MAX_PARTICLES);
 
+// Per-particle mass (heavier sets sink, lighter float)
+const pMass = new Float32Array(MAX_PARTICLES);
+const setMass = [1.0, 2.0, 3.0]; // each spawn is denser
+
 // Basis function values per particle (3 each)
 const ppx0 = new Float32Array(MAX_PARTICLES);
 const ppx1 = new Float32Array(MAX_PARTICLES);
@@ -339,12 +350,14 @@ function initParticles() {
     pT01[i] = 0;
     pT11[i] = 0;
     particleSet[i] = 0;
+    pMass[i] = setMass[0];
   }
 }
 
 function spawnParticles() {
   if (numParticles + BATCH_SIZE > MAX_PARTICLES) return; // at capacity
   const setId = numSets;
+  const mass = setMass[Math.min(setId, setMass.length - 1)];
   const start = numParticles;
   const end = start + BATCH_SIZE;
   for (let i = start; i < end; i++) {
@@ -358,6 +371,7 @@ function spawnParticles() {
     pT01[i] = 0;
     pT11[i] = 0;
     particleSet[i] = setId;
+    pMass[i] = mass;
   }
   assignStaticColors(start, end);
   numParticles = end;
@@ -387,16 +401,6 @@ function idx(i, j) {
 function simulate() {
   clearGrid();
 
-  // Compute inertial impulse from gravity vector change
-  // When the phone tilts, gravity changes direction in screen space.
-  // The fluid should resist this rotation (it has inertia in world space).
-  const dgx = gravityX - prevGravityX;
-  const dgy = gravityY - prevGravityY;
-  inertiaX = inertiaX * INERTIA_DECAY - dgx * INERTIA_STRENGTH;
-  inertiaY = inertiaY * INERTIA_DECAY - dgy * INERTIA_STRENGTH;
-  prevGravityX = gravityX;
-  prevGravityY = gravityY;
-
   const GW = GRID_W;
   const GH = GRID_H;
   const NP = numParticles;
@@ -412,6 +416,7 @@ function simulate() {
     const pvv = pv_vel[ip];
     ppu[ip] = puv;
     ppv[ip] = pvv;
+    const mass = pMass[ip];
 
     // Compute basis functions
     let x = cx - pxv;
@@ -453,11 +458,12 @@ function simulate() {
           activeIdx[numActiveNodes++] = n;
         }
         const phi = pxi * bpyArr[j];
-        gm[n]  += phi;
-        ggx[n] += gxi * bpyArr[j];
-        ggy[n] += pxi * bgyArr[j];
-        gu[n]  += phi * puv;
-        gv[n]  += phi * pvv;
+        const phim = phi * mass;
+        gm[n]  += phim;
+        ggx[n] += gxi * bpyArr[j] * mass;
+        ggy[n] += pxi * bgyArr[j] * mass;
+        gu[n]  += phim * puv;
+        gv[n]  += phim * pvv;
       }
     }
   }
@@ -642,13 +648,26 @@ function simulate() {
       }
     }
 
-    // Apply gravity (sensor-driven or default)
-    pu += gravityX;
-    pv += gravityY;
+    // Differential gravity: force = mass * g, so acceleration = mass * g
+    // Pressure acceleration from grid is mass-independent (same for all particles at a node),
+    // so heavy particles experience more gravity than pressure support → sink,
+    // light particles experience less gravity than pressure support → float.
+    const mass = pMass[ip];
+    pu += gravityX * mass;
+    pv += gravityY * mass;
 
-    // Apply inertial counter-force (fluid resists phone rotation)
-    pu += inertiaX;
-    pv += inertiaY;
+    // Apply linear acceleration pseudo-force (phone moving through space)
+    pu += linAccelX;
+    pv += linAccelY;
+
+    // Apply Z-axis spin: tangential pseudo-force resists phone rotation
+    // Phone spins clockwise → fluid resists → counter-clockwise tangential force
+    if (Math.abs(spinRate) > 1) {
+      const rx = px_pos[ip] - GRID_W * 0.5;
+      const ry = py_pos[ip] - GRID_H * 0.5;
+      pu += ry * spinRate * SPIN_STRENGTH;
+      pv -= rx * spinRate * SPIN_STRENGTH;
+    }
 
     // Apply shake impulse
     if (shakeImpulse > 0) {
@@ -672,31 +691,32 @@ function simulate() {
     pu_vel[ip] += pu;
     pv_vel[ip] += pv;
 
-    // Wall collisions with randomness
+    // Wall collisions: reflect velocity for bounce
+    const WALL_RESTITUTION = 0.5;
     const xf = px_pos[ip] + pu_vel[ip];
     const yf = py_pos[ip] + pv_vel[ip];
 
-    if (xf < 2) {
-      pu_vel[ip] += (2 - xf) + Math.random() * WALL_BOUNCE_RAND;
+    if (xf < WALL_MIN_X) {
+      pu_vel[ip] = Math.abs(pu_vel[ip]) * WALL_RESTITUTION + Math.random() * WALL_BOUNCE_RAND;
     } else if (xf > rightEdge) {
-      pu_vel[ip] += rightEdge - xf - Math.random() * WALL_BOUNCE_RAND;
+      pu_vel[ip] = -Math.abs(pu_vel[ip]) * WALL_RESTITUTION - Math.random() * WALL_BOUNCE_RAND;
     }
-    if (yf < 2) {
-      pv_vel[ip] += (2 - yf) + Math.random() * WALL_BOUNCE_RAND;
+    if (yf < WALL_MIN_Y) {
+      pv_vel[ip] = Math.abs(pv_vel[ip]) * WALL_RESTITUTION + Math.random() * WALL_BOUNCE_RAND;
     } else if (yf > bottomEdge) {
-      pv_vel[ip] += bottomEdge - yf - Math.random() * WALL_BOUNCE_RAND;
+      pv_vel[ip] = -Math.abs(pv_vel[ip]) * WALL_RESTITUTION - Math.random() * WALL_BOUNCE_RAND;
     }
 
-    // Transfer velocity back to grid
+    // Transfer velocity back to grid (mass-weighted momentum)
     const puv = pu_vel[ip];
     const pvv = pv_vel[ip];
     for (let i = 0; i < 3; i++) {
       const ppxi = bpxArr[i];
       for (let j = 0; j < 3; j++) {
         const n = (cx + i) * GH + (cy + j);
-        const phi = ppxi * bpyArr[j];
-        gu[n] += phi * puv;
-        gv[n] += phi * pvv;
+        const phim = ppxi * bpyArr[j] * mass;
+        gu[n] += phim * puv;
+        gv[n] += phim * pvv;
       }
     }
   }
@@ -732,6 +752,12 @@ function simulate() {
     py_pos[ip] += gvv;
     pu_vel[ip] += smoothing * (guv - pu_vel[ip]);
     pv_vel[ip] += smoothing * (gvv - pv_vel[ip]);
+
+    // Hard clamp position to boundary (grid velocity can push past walls)
+    if (px_pos[ip] < WALL_MIN_X) { px_pos[ip] = WALL_MIN_X; if (pu_vel[ip] < 0) pu_vel[ip] = 0; }
+    else if (px_pos[ip] > WALL_MAX_X) { px_pos[ip] = WALL_MAX_X; if (pu_vel[ip] > 0) pu_vel[ip] = 0; }
+    if (py_pos[ip] < WALL_MIN_Y) { py_pos[ip] = WALL_MIN_Y; if (pv_vel[ip] < 0) pv_vel[ip] = 0; }
+    else if (py_pos[ip] > WALL_MAX_Y) { py_pos[ip] = WALL_MAX_Y; if (pv_vel[ip] > 0) pv_vel[ip] = 0; }
   }
 
   // Decay shake impulse
@@ -739,6 +765,11 @@ function simulate() {
     shakeImpulse *= 0.85;
     if (shakeImpulse < 0.1) shakeImpulse = 0;
   }
+
+  // Decay linear acceleration (sensor events may pause when phone is still)
+  linAccelX *= 0.8;
+  linAccelY *= 0.8;
+  spinRate *= 0.8;
 }
 
 
@@ -755,8 +786,8 @@ function render() {
   const NS = numSets;
 
   if (useBright) {
-    // Full brightness: uniform color per set, fixed-length strokes
-    const fixedLen = 2.0;
+    // Full brightness: uniform color per set, fixed-length strokes in screen space
+    const fixedPx = 7; // fixed stroke length in pixels (direction-independent)
     const minSpeed = 0.05;
     var brightLookup = colorMode === "desert" ? setBrightDesert :
                        colorMode === "static" ? setBrightOcean : setBrightColors;
@@ -765,18 +796,21 @@ function render() {
       ctx.beginPath();
       for (let ip = 0; ip < NP; ip++) {
         if (particleSet[ip] !== sid) continue;
-        const x = px_pos[ip] * scaleX;
-        const y = py_pos[ip] * scaleY;
+        const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
+        const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
         const uv = pu_vel[ip];
         const vv = pv_vel[ip];
         const speed = Math.sqrt(uv * uv + vv * vv);
         let dx, dy;
         if (speed > minSpeed) {
-          dx = (uv / speed) * fixedLen * scaleX;
-          dy = (vv / speed) * fixedLen * scaleY;
+          // Compute direction in screen space, then normalize to fixedPx
+          let sx = (uv / speed) * scaleX;
+          let sy = (vv / speed) * scaleY;
+          const slen = Math.sqrt(sx * sx + sy * sy);
+          dx = (sx / slen) * fixedPx;
+          dy = (sy / slen) * fixedPx;
         } else {
-          const halfLen = fixedLen * 0.4;
-          dx = halfLen * scaleX;
+          dx = fixedPx;
           dy = 0;
         }
         ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
@@ -798,7 +832,7 @@ function render() {
         const uv = pu_vel[ip];
         const vv = pv_vel[ip];
         const speed = Math.sqrt(uv * uv + vv * vv);
-        const ci = Math.min(255, (speed * 512) | 0);
+        const ci = Math.max(80, Math.min(255, (speed * 512) | 0));
         const bucket = (ci * BUCKETS / 256) | 0;
         buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
       }
@@ -811,8 +845,8 @@ function render() {
         ctx.beginPath();
         for (let k = 0; k < list.length; k++) {
           const ip = list[k];
-          const x = px_pos[ip] * scaleX;
-          const y = py_pos[ip] * scaleY;
+          const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
+          const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
           const dx = pu_vel[ip] * scaleX * 2;
           const dy = pv_vel[ip] * scaleY * 2;
           ctx.moveTo(x, y);
@@ -832,8 +866,8 @@ function render() {
         for (let ip = 0; ip < NP; ip++) {
           if (particleSet[ip] !== sid || staticColors[ip] !== s) continue;
           any = true;
-          const x = px_pos[ip] * scaleX;
-          const y = py_pos[ip] * scaleY;
+          const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
+          const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
           const dx = pu_vel[ip] * scaleX * 2;
           const dy = pv_vel[ip] * scaleY * 2;
           ctx.moveTo(x, y);
@@ -875,8 +909,8 @@ function resize() {
   canvas.style.width = canvasW + "px";
   canvas.style.height = canvasH + "px";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  scaleX = canvasW / GRID_W;
-  scaleY = canvasH / GRID_H;
+  scaleX = canvasW / VIEW_W;
+  scaleY = canvasH / VIEW_H;
 }
 window.addEventListener("resize", resize);
 
@@ -885,8 +919,8 @@ window.addEventListener("resize", resize);
 canvas.addEventListener("touchstart", function(e) {
   e.preventDefault();
   const t = e.touches[0];
-  touchX = t.clientX / scaleX;
-  touchY = t.clientY / scaleY;
+  touchX = t.clientX / scaleX + WALL_MIN_X;
+  touchY = t.clientY / scaleY + WALL_MIN_Y;
   prevTouchX = touchX;
   prevTouchY = touchY;
   touchActive = true;
@@ -897,8 +931,8 @@ canvas.addEventListener("touchmove", function(e) {
   const t = e.touches[0];
   prevTouchX = touchX;
   prevTouchY = touchY;
-  touchX = t.clientX / scaleX;
-  touchY = t.clientY / scaleY;
+  touchX = t.clientX / scaleX + WALL_MIN_X;
+  touchY = t.clientY / scaleY + WALL_MIN_Y;
 }, { passive: false });
 
 canvas.addEventListener("touchend", function(e) {
@@ -912,8 +946,8 @@ canvas.addEventListener("touchcancel", function(e) {
 
 // Mouse fallback for desktop testing
 canvas.addEventListener("mousedown", function(e) {
-  touchX = e.clientX / scaleX;
-  touchY = e.clientY / scaleY;
+  touchX = e.clientX / scaleX + WALL_MIN_X;
+  touchY = e.clientY / scaleY + WALL_MIN_Y;
   prevTouchX = touchX;
   prevTouchY = touchY;
   touchActive = true;
@@ -922,8 +956,8 @@ canvas.addEventListener("mousemove", function(e) {
   if (!touchActive) return;
   prevTouchX = touchX;
   prevTouchY = touchY;
-  touchX = e.clientX / scaleX;
-  touchY = e.clientY / scaleY;
+  touchX = e.clientX / scaleX + WALL_MIN_X;
+  touchY = e.clientY / scaleY + WALL_MIN_Y;
 });
 canvas.addEventListener("mouseup", function() { touchActive = false; });
 
@@ -935,29 +969,33 @@ function handleOrientation(e) {
   orientBeta = e.beta || 0;
   orientGamma = e.gamma || 0;
 
-  // Convert tilt angles to gravity vector
-  // gamma controls X gravity (tilt left/right)
-  // beta controls Y gravity (tilt forward/back)
-  const GRAVITY_SCALE = 0.005;
-  const MAX_ANGLE = 60; // clamp angles
+  // Convert tilt angles to gravity vector using proper trigonometric projection.
+  // Real gravity component on a tilted surface = g * sin(angle).
+  // gamma controls X gravity (tilt left/right), beta controls Y (tilt forward/back).
+  const GRAVITY_MAG = 0.005;
+  const DEG2RAD = Math.PI / 180;
+  const MAX_ANGLE = 80; // clamp before sin() to avoid full 90° snap
 
   const clampedGamma = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientGamma));
   const clampedBeta = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientBeta));
 
-  gravityX = (clampedGamma / MAX_ANGLE) * GRAVITY_SCALE;
-  gravityY = (clampedBeta / MAX_ANGLE) * GRAVITY_SCALE;
+  gravityX = Math.sin(clampedGamma * DEG2RAD) * GRAVITY_MAG;
+  gravityY = Math.sin(clampedBeta * DEG2RAD) * GRAVITY_MAG;
 }
 
 
-// --- Sensor: DeviceMotion (shake detection) ---
+// --- Sensor: DeviceMotion (shake detection + linear acceleration) ---
 function handleMotion(e) {
-  const acc = e.accelerationIncludingGravity || e.acceleration;
-  if (!acc) return;
+  // Use gravity-free acceleration for both shake and linear force.
+  // accelerationIncludingGravity causes false shake triggers during tilt changes.
+  const acc = e.acceleration;
+  if (!acc || acc.x == null) return;
 
   const ax = acc.x || 0;
   const ay = acc.y || 0;
   const az = acc.z || 0;
 
+  // Shake detection
   const delta = Math.abs(ax - lastAccX) + Math.abs(ay - lastAccY) + Math.abs(az - lastAccZ);
   lastAccX = ax;
   lastAccY = ay;
@@ -965,10 +1003,23 @@ function handleMotion(e) {
 
   if (delta > shakeThreshold) {
     shakeImpulse = Math.min(delta, 80);
-    // Visual feedback
     const flash = document.getElementById("shake-flash");
     flash.style.opacity = "1";
     setTimeout(function() { flash.style.opacity = "0"; }, 200);
+  }
+
+  // Linear acceleration: phone moving through space.
+  // Clamp magnitude to avoid extreme forces from sensor noise / gravity leakage.
+  const MAX_ACCEL = 6; // m/s² cap (gentle push ≈ 2-3, brisk ≈ 5-6)
+  const clampedX = Math.max(-MAX_ACCEL, Math.min(MAX_ACCEL, ax));
+  const clampedY = Math.max(-MAX_ACCEL, Math.min(MAX_ACCEL, ay));
+  linAccelX = -clampedX * LIN_ACCEL_STRENGTH;
+  linAccelY = clampedY * LIN_ACCEL_STRENGTH;
+
+  // Z-axis rotation: spinning the phone flat
+  const rot = e.rotationRate;
+  if (rot && rot.alpha != null) {
+    spinRate = rot.alpha; // degrees/second around Z axis
   }
 }
 
@@ -1056,6 +1107,7 @@ document.getElementById("startBtn").addEventListener("click", async function() {
   document.getElementById("colorBtn").style.display = "block";
   document.getElementById("brightBtn").style.display = "block";
   document.getElementById("spawnBtn").style.display = "block";
+  document.getElementById("resetBtn").style.display = "block";
 
   await enableSensors();
 
@@ -1097,6 +1149,15 @@ onTap(document.getElementById("brightBtn"), function() {
 // --- Spawn button ---
 onTap(document.getElementById("spawnBtn"), function() {
   spawnParticles();
+});
+
+// --- Reset button ---
+onTap(document.getElementById("resetBtn"), function() {
+  numParticles = BATCH_SIZE;
+  numSets = 1;
+  initParticles();
+  assignStaticColors(0, BATCH_SIZE);
+  document.getElementById("spawnBtn").style.display = "block";
 });
 
 // --- Reload button ---
