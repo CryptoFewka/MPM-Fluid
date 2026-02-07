@@ -821,7 +821,7 @@ function render() {
         const uv = pu_vel[ip];
         const vv = pv_vel[ip];
         const speed = Math.sqrt(uv * uv + vv * vv);
-        const ci = Math.min(255, (speed * 512) | 0);
+        const ci = Math.max(40, Math.min(255, (speed * 512) | 0));
         const bucket = (ci * BUCKETS / 256) | 0;
         buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
       }
