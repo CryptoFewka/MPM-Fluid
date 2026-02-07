@@ -639,8 +639,21 @@ function render() {
 
   const useBright = brightMode === "full";
 
-  if (colorMode === "velocity") {
-    const pal = useBright ? paletteBright : palette;
+  if (useBright) {
+    // Full brightness: single uniform color, no velocity mapping
+    ctx.strokeStyle = colorMode === "velocity" ? "rgb(200,220,255)" : "rgb(140,200,255)";
+    ctx.beginPath();
+    for (let ip = 0; ip < NUM_PARTICLES; ip++) {
+      const x = px_pos[ip] * scaleX;
+      const y = py_pos[ip] * scaleY;
+      const dx = pu_vel[ip] * scaleX * 2;
+      const dy = pv_vel[ip] * scaleY * 2;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - dx, y - dy);
+    }
+    ctx.stroke();
+  } else if (colorMode === "velocity") {
+    // Velocity-mapped colors (dynamic brightness)
     const BUCKETS = 32;
     const buckets = new Array(BUCKETS);
     for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
@@ -658,7 +671,7 @@ function render() {
       const list = buckets[b];
       if (list.length === 0) continue;
       const ci = ((b + 0.5) / BUCKETS * 256) | 0;
-      ctx.strokeStyle = pal[Math.min(ci, 255)];
+      ctx.strokeStyle = palette[Math.min(ci, 255)];
       ctx.beginPath();
       for (let k = 0; k < list.length; k++) {
         const ip = list[k];
@@ -672,11 +685,14 @@ function render() {
       ctx.stroke();
     }
   } else {
-    // Static blue: single color when full bright, shaded when dynamic
-    if (useBright) {
-      ctx.strokeStyle = "rgb(140,200,255)";
+    // Static blue shades (dynamic brightness, per-particle shade)
+    for (let s = 0; s < 64; s++) {
+      ctx.strokeStyle = staticPalette[s];
       ctx.beginPath();
+      let any = false;
       for (let ip = 0; ip < NUM_PARTICLES; ip++) {
+        if (staticColors[ip] !== s) continue;
+        any = true;
         const x = px_pos[ip] * scaleX;
         const y = py_pos[ip] * scaleY;
         const dx = pu_vel[ip] * scaleX * 2;
@@ -684,24 +700,7 @@ function render() {
         ctx.moveTo(x, y);
         ctx.lineTo(x - dx, y - dy);
       }
-      ctx.stroke();
-    } else {
-      for (let s = 0; s < 64; s++) {
-        ctx.strokeStyle = staticPalette[s];
-        ctx.beginPath();
-        let any = false;
-        for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-          if (staticColors[ip] !== s) continue;
-          any = true;
-          const x = px_pos[ip] * scaleX;
-          const y = py_pos[ip] * scaleY;
-          const dx = pu_vel[ip] * scaleX * 2;
-          const dy = pv_vel[ip] * scaleY * 2;
-          ctx.moveTo(x, y);
-          ctx.lineTo(x - dx, y - dy);
-        }
-        if (any) ctx.stroke();
-      }
+      if (any) ctx.stroke();
     }
   }
 
