@@ -125,14 +125,14 @@ void initGridAndParticles() {
 //----------------------------------------------------------------------------
 void render() {
 
-  noSmooth();
-  stroke (255,255,255); 
-  beginShape(POINTS); 
+  smooth();
+  noStroke();
+  fill(255, 255, 255);
+  float circleRadius = 3.0;
   for (int ip=0; ip<nParticles; ip++) {
     Particle p = particles[ip];
-    vertex (SC*p.x, SC*p.y);
+    ellipse(SC*p.x, SC*p.y, circleRadius, circleRadius);
   }
-  endShape();
 
 
 }

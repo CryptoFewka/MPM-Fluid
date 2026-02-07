@@ -565,19 +565,13 @@ void ofxMPMFluid::draw(){
 	ofPushMatrix();
 	ofScale(scaleFactor, scaleFactor, 1.0);
 	
-	// Draw the active particles as a short line, 
-	// using their velocity for their length. 
-	vector<ofVec2f> verts;
-
+	// Draw the active particles as small circles.
+	float circleRadius = 1.5;
+	int circleResolution = 12;
 	for (int ip=0; ip<numParticles; ip++) {
 		ofxMPMParticle* p = particles[ip];
-		verts.push_back(ofVec2f(p->x, p->y));
-		verts.push_back(ofVec2f(p->x - p->u, p->y - p->v));
+		ofCircle(p->x, p->y, circleRadius);
 	}
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glVertexPointer(2, GL_FLOAT, 0, &(verts[0].x));
-	glDrawArrays(GL_LINES, 0, verts.size());
-	glDisableClientState(GL_VERTEX_ARRAY);
 	ofPopMatrix();
 }
 
