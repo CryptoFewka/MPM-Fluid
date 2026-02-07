@@ -284,8 +284,8 @@ const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 let canvasW, canvasH, scaleX, scaleY;
 // Particle-accessible region (walls clamp to [WALL_MIN, *_MAX])
-const WALL_MIN_X = 2, WALL_MAX_X = GRID_W - 3;
-const WALL_MIN_Y = 2, WALL_MAX_Y = GRID_H - 3;
+const WALL_MIN_X = 3, WALL_MAX_X = GRID_W - 3;
+const WALL_MIN_Y = 3, WALL_MAX_Y = GRID_H - 3;
 const VIEW_W = WALL_MAX_X - WALL_MIN_X;
 const VIEW_H = WALL_MAX_Y - WALL_MIN_Y;
 
@@ -696,12 +696,12 @@ function simulate() {
     const xf = px_pos[ip] + pu_vel[ip];
     const yf = py_pos[ip] + pv_vel[ip];
 
-    if (xf < 2) {
+    if (xf < WALL_MIN_X) {
       pu_vel[ip] = Math.abs(pu_vel[ip]) * WALL_RESTITUTION + Math.random() * WALL_BOUNCE_RAND;
     } else if (xf > rightEdge) {
       pu_vel[ip] = -Math.abs(pu_vel[ip]) * WALL_RESTITUTION - Math.random() * WALL_BOUNCE_RAND;
     }
-    if (yf < 2) {
+    if (yf < WALL_MIN_Y) {
       pv_vel[ip] = Math.abs(pv_vel[ip]) * WALL_RESTITUTION + Math.random() * WALL_BOUNCE_RAND;
     } else if (yf > bottomEdge) {
       pv_vel[ip] = -Math.abs(pv_vel[ip]) * WALL_RESTITUTION - Math.random() * WALL_BOUNCE_RAND;
@@ -752,6 +752,12 @@ function simulate() {
     py_pos[ip] += gvv;
     pu_vel[ip] += smoothing * (guv - pu_vel[ip]);
     pv_vel[ip] += smoothing * (gvv - pv_vel[ip]);
+
+    // Hard clamp position to boundary (grid velocity can push past walls)
+    if (px_pos[ip] < WALL_MIN_X) { px_pos[ip] = WALL_MIN_X; if (pu_vel[ip] < 0) pu_vel[ip] = 0; }
+    else if (px_pos[ip] > WALL_MAX_X) { px_pos[ip] = WALL_MAX_X; if (pu_vel[ip] > 0) pu_vel[ip] = 0; }
+    if (py_pos[ip] < WALL_MIN_Y) { py_pos[ip] = WALL_MIN_Y; if (pv_vel[ip] < 0) pv_vel[ip] = 0; }
+    else if (py_pos[ip] > WALL_MAX_Y) { py_pos[ip] = WALL_MAX_Y; if (pv_vel[ip] > 0) pv_vel[ip] = 0; }
   }
 
   // Decay shake impulse
