@@ -48,6 +48,7 @@ canvas {
 #colorBtn { right: 12px; }
 #brightBtn { right: 140px; }
 #spawnBtn { left: 12px; }
+#resetBtn { left: 100px; }
 #reloadBtn {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   background: #2196F3; color: #fff; border: none; border-radius: 28px;
@@ -74,6 +75,7 @@ canvas {
 <canvas id="c"></canvas>
 <div id="shake-flash"></div>
 <div id="hud"></div>
+<button id="resetBtn" class="ctrl-btn" style="display:none">Reset</button>
 <button id="spawnBtn" class="ctrl-btn" style="display:none">Spawn</button>
 <button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
 <button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
@@ -1077,6 +1079,7 @@ document.getElementById("startBtn").addEventListener("click", async function() {
   document.getElementById("colorBtn").style.display = "block";
   document.getElementById("brightBtn").style.display = "block";
   document.getElementById("spawnBtn").style.display = "block";
+  document.getElementById("resetBtn").style.display = "block";
 
   await enableSensors();
 
@@ -1118,6 +1121,15 @@ onTap(document.getElementById("brightBtn"), function() {
 // --- Spawn button ---
 onTap(document.getElementById("spawnBtn"), function() {
   spawnParticles();
+});
+
+// --- Reset button ---
+onTap(document.getElementById("resetBtn"), function() {
+  numParticles = BATCH_SIZE;
+  numSets = 1;
+  initParticles();
+  assignStaticColors(0, BATCH_SIZE);
+  document.getElementById("spawnBtn").style.display = "block";
 });
 
 // --- Reload button ---
