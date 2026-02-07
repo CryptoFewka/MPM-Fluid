@@ -80,11 +80,32 @@ let viscosity = 1.0;
 let yieldRate = 1.0;
 let smoothing = 1.0;
 
-// Obstacle
-const obsCX = GRID_W * 0.75;
-const obsCY = GRID_H * 0.75;
-const obsR = GRID_W * 0.075;
-const obsR2 = obsR * obsR;
+// Color palette: velocity-mapped (blue -> cyan -> green -> yellow -> pink -> white)
+const palette = [];
+function buildPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {        // deep blue -> cyan
+      const s = t / 0.2;
+      r = 30; g = 60 + 160 * s; b = 200 + 55 * s;
+    } else if (t < 0.4) { // cyan -> green
+      const s = (t - 0.2) / 0.2;
+      r = 30 + 40 * s; g = 220 + 35 * s; b = 255 - 130 * s;
+    } else if (t < 0.6) { // green -> yellow
+      const s = (t - 0.4) / 0.2;
+      r = 70 + 185 * s; g = 255; b = 125 - 95 * s;
+    } else if (t < 0.8) { // yellow -> hot pink
+      const s = (t - 0.6) / 0.2;
+      r = 255; g = 255 - 155 * s; b = 30 + 120 * s;
+    } else {               // hot pink -> white
+      const s = (t - 0.8) / 0.2;
+      r = 255; g = 100 + 155 * s; b = 150 + 105 * s;
+    }
+    palette.push("rgb(" + (r|0) + "," + (g|0) + "," + (b|0) + ")");
+  }
+}
+buildPalette();
 
 // Touch state
 let touchActive = false;
@@ -364,18 +385,6 @@ function simulate() {
     if (pyv < 3) { fy += 3 - pyv; bounced = true; }
     else if (pyv > GH - 3) { fy += (GH - 3) - pyv; bounced = true; }
 
-    // Obstacle collision
-    const odx = obsCX - pxv;
-    const ody = obsCY - pyv;
-    const oD2 = odx*odx + ody*ody;
-    if (oD2 < obsR2) {
-      const oD = Math.sqrt(oD2);
-      const dR = obsR - oD;
-      fx -= dR * (odx / oD);
-      fy -= dR * (ody / oD);
-      bounced = true;
-    }
-
     trace *= stiffnessBulk;
     const T00 = elasticity * pT00[ip] + viscosity * D00c + pressure + trace;
     const T01v = elasticity * pT01[ip] + viscosity * D01;
@@ -537,51 +546,62 @@ function simulate() {
 
 // --- Rendering ---
 function render() {
-  ctx.fillStyle = "#0a0a14";
+  // Slight fade for motion trails instead of full clear
+  ctx.fillStyle = "rgba(6,4,16,0.35)";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  // Draw obstacle
-  ctx.beginPath();
-  ctx.arc(obsCX * scaleX, obsCY * scaleY, obsR * Math.min(scaleX, scaleY), 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(60,60,80,0.6)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(100,100,140,0.4)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  // Batch particles by color bucket for fewer state changes
+  // Use 16 buckets across the palette
+  const BUCKETS = 32;
+  const buckets = new Array(BUCKETS);
+  for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
 
-  // Draw particles as small lines showing velocity
-  ctx.strokeStyle = "rgba(140,200,255,0.7)";
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
   for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-    const x = px_pos[ip] * scaleX;
-    const y = py_pos[ip] * scaleY;
-    const dx = pu_vel[ip] * scaleX * 1.5;
-    const dy = pv_vel[ip] * scaleY * 1.5;
-    ctx.moveTo(x, y);
-    ctx.lineTo(x - dx, y - dy);
+    const uv = pu_vel[ip];
+    const vv = pv_vel[ip];
+    const speed = Math.sqrt(uv * uv + vv * vv);
+    // Map speed 0..0.5 -> palette index 0..255
+    const ci = Math.min(255, (speed * 512) | 0);
+    const bucket = (ci * BUCKETS / 256) | 0;
+    buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
   }
-  ctx.stroke();
 
-  // Gravity direction indicator
+  ctx.lineWidth = 1.4;
+  for (let b = 0; b < BUCKETS; b++) {
+    const list = buckets[b];
+    if (list.length === 0) continue;
+    const ci = ((b + 0.5) / BUCKETS * 256) | 0;
+    ctx.strokeStyle = palette[Math.min(ci, 255)];
+    ctx.beginPath();
+    for (let k = 0; k < list.length; k++) {
+      const ip = list[k];
+      const x = px_pos[ip] * scaleX;
+      const y = py_pos[ip] * scaleY;
+      const dx = pu_vel[ip] * scaleX * 2;
+      const dy = pv_vel[ip] * scaleY * 2;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - dx, y - dy);
+    }
+    ctx.stroke();
+  }
+
+  // Gravity direction indicator (small dot + line, no circle)
   const mag = Math.sqrt(gravityX * gravityX + gravityY * gravityY);
   if (mag > 0.0001) {
-    const indX = canvasW - 30;
-    const indY = 30;
-    const arrowLen = 18;
+    const indX = canvasW - 24;
+    const indY = 24;
     const nx = gravityX / mag;
     const ny = gravityY / mag;
-    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(indX, indY, 14, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(100,200,255,0.8)";
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
     ctx.moveTo(indX, indY);
-    ctx.lineTo(indX + nx * arrowLen, indY + ny * arrowLen);
+    ctx.lineTo(indX + nx * 14, indY + ny * 14);
     ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.beginPath();
+    ctx.arc(indX, indY, 3, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
