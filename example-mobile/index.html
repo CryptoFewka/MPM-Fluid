@@ -778,7 +778,7 @@ function render() {
   ctx.fillStyle = colorMode === "desert" ? "#14100a" : "#0a0a14";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  ctx.lineWidth = 1.0;
+  const circleRadius = 3; // radius for circle particles in pixels
 
   const useBright = brightMode === "full";
 
@@ -786,40 +786,23 @@ function render() {
   const NS = numSets;
 
   if (useBright) {
-    // Full brightness: uniform color per set, fixed-length strokes in screen space
-    const fixedPx = 7; // fixed stroke length in pixels (direction-independent)
-    const minSpeed = 0.05;
+    // Full brightness: uniform color per set, circles
     var brightLookup = colorMode === "desert" ? setBrightDesert :
                        colorMode === "static" ? setBrightOcean : setBrightColors;
     for (let sid = 0; sid < NS; sid++) {
-      ctx.strokeStyle = brightLookup[sid] || setBrightColors[sid] || "rgb(200,220,255)";
+      ctx.fillStyle = brightLookup[sid] || setBrightColors[sid] || "rgb(200,220,255)";
       ctx.beginPath();
       for (let ip = 0; ip < NP; ip++) {
         if (particleSet[ip] !== sid) continue;
         const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
         const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
-        const uv = pu_vel[ip];
-        const vv = pv_vel[ip];
-        const speed = Math.sqrt(uv * uv + vv * vv);
-        let dx, dy;
-        if (speed > minSpeed) {
-          // Compute direction in screen space, then normalize to fixedPx
-          let sx = (uv / speed) * scaleX;
-          let sy = (vv / speed) * scaleY;
-          const slen = Math.sqrt(sx * sx + sy * sy);
-          dx = (sx / slen) * fixedPx;
-          dy = (sy / slen) * fixedPx;
-        } else {
-          dx = fixedPx;
-          dy = 0;
-        }
-        ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
-        ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
+        ctx.moveTo(x + circleRadius, y);
+        ctx.arc(x, y, circleRadius, 0, Math.PI * 2);
       }
-      ctx.stroke();
+      ctx.fill();
     }
   } else if (colorMode === "velocity" || colorMode === "desert") {
-    // Velocity-mapped colors per set
+    // Velocity-mapped colors per set, circles
     var palLookup = colorMode === "desert" ? setDesertPalettes : setVelPalettes;
     const BUCKETS = 32;
     for (let sid = 0; sid < NS; sid++) {
@@ -841,26 +824,24 @@ function render() {
         const list = buckets[b];
         if (list.length === 0) continue;
         const ci = ((b + 0.5) / BUCKETS * 256) | 0;
-        ctx.strokeStyle = pal[Math.min(ci, 255)];
+        ctx.fillStyle = pal[Math.min(ci, 255)];
         ctx.beginPath();
         for (let k = 0; k < list.length; k++) {
           const ip = list[k];
           const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
           const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
-          const dx = pu_vel[ip] * scaleX * 2;
-          const dy = pv_vel[ip] * scaleY * 2;
-          ctx.moveTo(x, y);
-          ctx.lineTo(x - dx, y - dy);
+          ctx.moveTo(x + circleRadius, y);
+          ctx.arc(x, y, circleRadius, 0, Math.PI * 2);
         }
-        ctx.stroke();
+        ctx.fill();
       }
     }
   } else {
-    // Static shades per set
+    // Static shades per set, circles
     for (let sid = 0; sid < NS; sid++) {
       const sPal = setStaticPalettes[sid] || setStaticPalettes[0];
       for (let s = 0; s < 64; s++) {
-        ctx.strokeStyle = sPal[s];
+        ctx.fillStyle = sPal[s];
         ctx.beginPath();
         let any = false;
         for (let ip = 0; ip < NP; ip++) {
@@ -868,12 +849,10 @@ function render() {
           any = true;
           const x = (px_pos[ip] - WALL_MIN_X) * scaleX;
           const y = (py_pos[ip] - WALL_MIN_Y) * scaleY;
-          const dx = pu_vel[ip] * scaleX * 2;
-          const dy = pv_vel[ip] * scaleY * 2;
-          ctx.moveTo(x, y);
-          ctx.lineTo(x - dx, y - dy);
+          ctx.moveTo(x + circleRadius, y);
+          ctx.arc(x, y, circleRadius, 0, Math.PI * 2);
         }
-        if (any) ctx.stroke();
+        if (any) ctx.fill();
       }
     }
   }
