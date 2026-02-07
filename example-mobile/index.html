@@ -72,6 +72,10 @@ const WALL_BOUNCE_RAND = 0.03;
 // --- Simulation state ---
 let particles, grid, activeNodes, numActiveNodes;
 let gravityX = 0.0, gravityY = 0.05;
+let prevGravityX = 0.0, prevGravityY = 0.05;
+let inertiaX = 0.0, inertiaY = 0.0;
+const INERTIA_STRENGTH = 80.0; // how strongly the fluid resists coordinate rotation
+const INERTIA_DECAY = 0.9;     // how quickly the inertial impulse fades
 let densitySetting = 3.5;
 let stiffness = 0.5;
 let bulkViscosity = 3.0;
@@ -202,6 +206,16 @@ function idx(i, j) {
 
 function simulate() {
   clearGrid();
+
+  // Compute inertial impulse from gravity vector change
+  // When the phone tilts, gravity changes direction in screen space.
+  // The fluid should resist this rotation (it has inertia in world space).
+  const dgx = gravityX - prevGravityX;
+  const dgy = gravityY - prevGravityY;
+  inertiaX = inertiaX * INERTIA_DECAY - dgx * INERTIA_STRENGTH;
+  inertiaY = inertiaY * INERTIA_DECAY - dgy * INERTIA_STRENGTH;
+  prevGravityX = gravityX;
+  prevGravityY = gravityY;
 
   const GW = GRID_W;
   const GH = GRID_H;
@@ -451,6 +465,10 @@ function simulate() {
     // Apply gravity (sensor-driven or default)
     pu += gravityX;
     pv += gravityY;
+
+    // Apply inertial counter-force (fluid resists phone rotation)
+    pu += inertiaX;
+    pv += inertiaY;
 
     // Apply shake impulse
     if (shakeImpulse > 0) {
