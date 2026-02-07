@@ -114,6 +114,8 @@ let prevGravityX = 0.0, prevGravityY = 0.005;
 let inertiaX = 0.0, inertiaY = 0.0;
 const INERTIA_STRENGTH = 21.0; // how strongly the fluid resists coordinate rotation
 const INERTIA_DECAY = 0.65;    // how quickly the inertial impulse fades
+let linAccelX = 0.0, linAccelY = 0.0; // linear acceleration pseudo-force
+const LIN_ACCEL_STRENGTH = 0.0004; // scale device m/s² to grid accel
 let densitySetting = 3.5;
 let stiffness = 0.5;
 let bulkViscosity = 3.0;
@@ -670,6 +672,10 @@ function simulate() {
     pu += inertiaX;
     pv += inertiaY;
 
+    // Apply linear acceleration pseudo-force (phone moving through space)
+    pu += linAccelX;
+    pv += linAccelY;
+
     // Apply shake impulse
     if (shakeImpulse > 0) {
       pu += (Math.random() - 0.5) * shakeImpulse * 0.04;
@@ -760,6 +766,10 @@ function simulate() {
     shakeImpulse *= 0.85;
     if (shakeImpulse < 0.1) shakeImpulse = 0;
   }
+
+  // Decay linear acceleration (sensor events may pause when phone is still)
+  linAccelX *= 0.8;
+  linAccelY *= 0.8;
 }
 
 
@@ -973,7 +983,7 @@ function handleOrientation(e) {
 }
 
 
-// --- Sensor: DeviceMotion (shake detection) ---
+// --- Sensor: DeviceMotion (shake detection + linear acceleration) ---
 function handleMotion(e) {
   const acc = e.accelerationIncludingGravity || e.acceleration;
   if (!acc) return;
@@ -993,6 +1003,17 @@ function handleMotion(e) {
     const flash = document.getElementById("shake-flash");
     flash.style.opacity = "1";
     setTimeout(function() { flash.style.opacity = "0"; }, 200);
+  }
+
+  // Linear acceleration: phone moving through space
+  // e.acceleration gives device acceleration without gravity (pure translational)
+  const lin = e.acceleration;
+  if (lin && lin.x != null) {
+    // In phone reference frame, if phone accelerates right (lin.x > 0),
+    // particles feel pseudo-force to the LEFT (negative x).
+    // Phone portrait: lin.x → screen X, lin.y → screen -Y (up on phone = +y in API)
+    linAccelX = -lin.x * LIN_ACCEL_STRENGTH;
+    linAccelY = lin.y * LIN_ACCEL_STRENGTH;
   }
 }
 
