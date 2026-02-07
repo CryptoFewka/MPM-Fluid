@@ -112,7 +112,6 @@ let prevGravityX = 0.0, prevGravityY = 0.005;
 let inertiaX = 0.0, inertiaY = 0.0;
 const INERTIA_STRENGTH = 21.0; // how strongly the fluid resists coordinate rotation
 const INERTIA_DECAY = 0.65;    // how quickly the inertial impulse fades
-const BUOYANCY_STRENGTH = 3.0;  // Archimedes buoyancy multiplier (>1 needed for active separation)
 let densitySetting = 3.5;
 let stiffness = 0.5;
 let bulkViscosity = 3.0;
@@ -293,7 +292,6 @@ const gu  = new Float32Array(GRID_SIZE);
 const gv  = new Float32Array(GRID_SIZE);
 const gax = new Float32Array(GRID_SIZE);
 const gay = new Float32Array(GRID_SIZE);
-const gn  = new Float32Array(GRID_SIZE); // number density (unweighted by mass, for buoyancy)
 const gActive = new Uint8Array(GRID_SIZE);
 
 // Active node indices
@@ -379,7 +377,6 @@ function spawnParticles() {
 
 function clearGrid() {
   gm.fill(0);
-  gn.fill(0);
   ggx.fill(0);
   ggy.fill(0);
   gu.fill(0);
@@ -465,7 +462,6 @@ function simulate() {
         }
         const phi = pxi * bpyArr[j];
         const phim = phi * mass;
-        gn[n]  += phi;
         gm[n]  += phim;
         ggx[n] += gxi * bpyArr[j] * mass;
         ggy[n] += pxi * bgyArr[j] * mass;
@@ -645,7 +641,6 @@ function simulate() {
     const bpyArr = [ppy0[ip], ppy1[ip], ppy2[ip]];
 
     let pu = 0, pv = 0;
-    let localMassDensity = 0, localNumDensity = 0;
     for (let i = 0; i < 3; i++) {
       const ppxi = bpxArr[i];
       for (let j = 0; j < 3; j++) {
@@ -653,24 +648,16 @@ function simulate() {
         const phi = ppxi * bpyArr[j];
         pu += phi * gax[n];
         pv += phi * gay[n];
-        localMassDensity += phi * gm[n];
-        localNumDensity += phi * gn[n];
       }
     }
 
-    // Apply gravity (sensor-driven or default)
-    pu += gravityX;
-    pv += gravityY;
-
-    // Archimedes buoyancy: light particles float, heavy sink
-    // a_buoyancy = (ρ_local/ρ_particle - 1) * g (opposes gravity for light particles)
+    // Differential gravity: force = mass * g, so acceleration = mass * g
+    // Pressure acceleration from grid is mass-independent (same for all particles at a node),
+    // so heavy particles experience more gravity than pressure support → sink,
+    // light particles experience less gravity than pressure support → float.
     const mass = pMass[ip];
-    if (localNumDensity > 0.01) {
-      const localAvgMass = localMassDensity / localNumDensity;
-      const buoyancy = (localAvgMass / mass - 1.0) * BUOYANCY_STRENGTH;
-      pu -= buoyancy * gravityX;
-      pv -= buoyancy * gravityY;
-    }
+    pu += gravityX * mass;
+    pv += gravityY * mass;
 
     // Apply inertial counter-force (fluid resists phone rotation)
     pu += inertiaX;
