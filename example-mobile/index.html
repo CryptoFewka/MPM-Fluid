@@ -116,6 +116,8 @@ const INERTIA_STRENGTH = 21.0; // how strongly the fluid resists coordinate rota
 const INERTIA_DECAY = 0.65;    // how quickly the inertial impulse fades
 let linAccelX = 0.0, linAccelY = 0.0; // linear acceleration pseudo-force
 const LIN_ACCEL_STRENGTH = 0.0004; // scale device m/s² to grid accel
+let spinRate = 0.0; // Z-axis rotation rate (deg/s from rotationRate.alpha)
+const SPIN_STRENGTH = 0.00004; // scale rotation rate to tangential grid force
 let densitySetting = 3.5;
 let stiffness = 0.5;
 let bulkViscosity = 3.0;
@@ -676,6 +678,15 @@ function simulate() {
     pu += linAccelX;
     pv += linAccelY;
 
+    // Apply Z-axis spin: tangential pseudo-force resists phone rotation
+    // Phone spins clockwise → fluid resists → counter-clockwise tangential force
+    if (Math.abs(spinRate) > 1) {
+      const rx = px_pos[ip] - GRID_W * 0.5;
+      const ry = py_pos[ip] - GRID_H * 0.5;
+      pu += ry * spinRate * SPIN_STRENGTH;
+      pv -= rx * spinRate * SPIN_STRENGTH;
+    }
+
     // Apply shake impulse
     if (shakeImpulse > 0) {
       pu += (Math.random() - 0.5) * shakeImpulse * 0.04;
@@ -770,6 +781,7 @@ function simulate() {
   // Decay linear acceleration (sensor events may pause when phone is still)
   linAccelX *= 0.8;
   linAccelY *= 0.8;
+  spinRate *= 0.8;
 }
 
 
@@ -1014,6 +1026,12 @@ function handleMotion(e) {
     // Phone portrait: lin.x → screen X, lin.y → screen -Y (up on phone = +y in API)
     linAccelX = -lin.x * LIN_ACCEL_STRENGTH;
     linAccelY = lin.y * LIN_ACCEL_STRENGTH;
+  }
+
+  // Z-axis rotation: spinning the phone flat
+  const rot = e.rotationRate;
+  if (rot && rot.alpha != null) {
+    spinRate = rot.alpha; // degrees/second around Z axis
   }
 }
 
