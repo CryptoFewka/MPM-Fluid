@@ -37,6 +37,26 @@ canvas {
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 #startBtn:active { background: #1976D2; }
+.ctrl-btn {
+  position: fixed; bottom: 12px;
+  background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.25); border-radius: 20px;
+  padding: 8px 16px; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: pointer; z-index: 6; -webkit-tap-highlight-color: transparent;
+}
+.ctrl-btn:active { background: rgba(255,255,255,0.25); }
+#colorBtn { right: 12px; }
+#brightBtn { right: 140px; }
+#spawnBtn { left: 12px; }
+#reloadBtn {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  background: #2196F3; color: #fff; border: none; border-radius: 28px;
+  padding: 16px 36px; font-size: 18px; font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: pointer; z-index: 20; -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 4px 24px rgba(33,150,243,0.5);
+}
+#reloadBtn:active { background: #1976D2; }
 #hud {
   position: fixed; top: 8px; left: 8px;
   color: rgba(255,255,255,0.5); font-family: monospace; font-size: 11px;
@@ -54,6 +74,10 @@ canvas {
 <canvas id="c"></canvas>
 <div id="shake-flash"></div>
 <div id="hud"></div>
+<button id="spawnBtn" class="ctrl-btn" style="display:none">Spawn</button>
+<button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
+<button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
+<button id="reloadBtn" style="display:none">Update Available - Reload</button>
 <div id="overlay">
   <h1>MPM Fluid Simulation</h1>
   <p>Tilt your phone to change gravity direction. Shake to disturb the fluid. Touch and drag to push particles.</p>
@@ -63,15 +87,31 @@ canvas {
 <script>
 "use strict";
 
+// --- Unregister any stale service workers (from previous versions) ---
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations().then(function(registrations) {
+    for (var i = 0; i < registrations.length; i++) {
+      registrations[i].unregister();
+    }
+  });
+}
+
 // --- Configuration ---
 const GRID_W = 100;
 const GRID_H = 75;
-const NUM_PARTICLES = 8000;
+const BATCH_SIZE = 8000;
+const MAX_PARTICLES = 24000; // up to 3 spawns
 const WALL_BOUNCE_RAND = 0.03;
+let numParticles = BATCH_SIZE;
+let numSets = 1;
 
 // --- Simulation state ---
 let particles, grid, activeNodes, numActiveNodes;
-let gravityX = 0.0, gravityY = 0.05;
+let gravityX = 0.0, gravityY = 0.005;
+let prevGravityX = 0.0, prevGravityY = 0.005;
+let inertiaX = 0.0, inertiaY = 0.0;
+const INERTIA_STRENGTH = 21.0; // how strongly the fluid resists coordinate rotation
+const INERTIA_DECAY = 0.65;    // how quickly the inertial impulse fades
 let densitySetting = 3.5;
 let stiffness = 0.5;
 let bulkViscosity = 3.0;
@@ -107,6 +147,123 @@ function buildPalette() {
 }
 buildPalette();
 
+// Desert palette: velocity-mapped (deep brown -> burnt orange -> sand -> gold -> cream)
+const desertPalette = [];
+function buildDesertPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {        // dark brown -> burnt sienna
+      const s = t / 0.2;
+      r = 80 + 80 * s; g = 30 + 40 * s; b = 10 + 15 * s;
+    } else if (t < 0.4) { // burnt sienna -> burnt orange
+      const s = (t - 0.2) / 0.2;
+      r = 160 + 50 * s; g = 70 + 50 * s; b = 25 + 10 * s;
+    } else if (t < 0.6) { // burnt orange -> sandy gold
+      const s = (t - 0.4) / 0.2;
+      r = 210 + 30 * s; g = 120 + 70 * s; b = 35 + 60 * s;
+    } else if (t < 0.8) { // sandy gold -> warm tan
+      const s = (t - 0.6) / 0.2;
+      r = 240 + 15 * s; g = 190 + 35 * s; b = 95 + 55 * s;
+    } else {               // warm tan -> cream white
+      const s = (t - 0.8) / 0.2;
+      r = 255; g = 225 + 30 * s; b = 150 + 70 * s;
+    }
+    desertPalette.push("rgb(" + (r|0) + "," + (g|0) + "," + (b|0) + ")");
+  }
+}
+buildDesertPalette();
+
+// Magenta/violet palette: velocity-mapped
+const magentaPalette = [];
+function buildMagentaPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {
+      const s = t / 0.2;
+      r = 60 + 100 * s; g = 20 + 20 * s; b = 100 + 80 * s;
+    } else if (t < 0.4) {
+      const s = (t - 0.2) / 0.2;
+      r = 160 + 60 * s; g = 40 + 20 * s; b = 180 + 40 * s;
+    } else if (t < 0.6) {
+      const s = (t - 0.4) / 0.2;
+      r = 220 + 35 * s; g = 60 + 60 * s; b = 220 - 20 * s;
+    } else if (t < 0.8) {
+      const s = (t - 0.6) / 0.2;
+      r = 255; g = 120 + 80 * s; b = 200 - 40 * s;
+    } else {
+      const s = (t - 0.8) / 0.2;
+      r = 255; g = 200 + 55 * s; b = 160 + 95 * s;
+    }
+    magentaPalette.push("rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")");
+  }
+}
+buildMagentaPalette();
+
+// Emerald/green palette: velocity-mapped
+const emeraldPalette = [];
+function buildEmeraldPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {
+      const s = t / 0.2;
+      r = 10 + 30 * s; g = 60 + 80 * s; b = 30 + 40 * s;
+    } else if (t < 0.4) {
+      const s = (t - 0.2) / 0.2;
+      r = 40 + 30 * s; g = 140 + 60 * s; b = 70 + 30 * s;
+    } else if (t < 0.6) {
+      const s = (t - 0.4) / 0.2;
+      r = 70 + 80 * s; g = 200 + 40 * s; b = 100 - 20 * s;
+    } else if (t < 0.8) {
+      const s = (t - 0.6) / 0.2;
+      r = 150 + 70 * s; g = 240 + 15 * s; b = 80 + 60 * s;
+    } else {
+      const s = (t - 0.8) / 0.2;
+      r = 220 + 35 * s; g = 255; b = 140 + 80 * s;
+    }
+    emeraldPalette.push("rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")");
+  }
+}
+buildEmeraldPalette();
+
+// Per-set palette arrays (indexed by set ID)
+const setVelPalettes = [palette, magentaPalette, emeraldPalette];
+const setDesertPalettes = [desertPalette, magentaPalette, emeraldPalette];
+const setBrightColors = ["rgb(200,220,255)", "rgb(255,160,220)", "rgb(140,255,180)"];
+const setBrightOcean = ["rgb(140,200,255)", "rgb(220,140,255)", "rgb(140,255,200)"];
+const setBrightDesert = ["rgb(230,190,120)", "rgb(255,160,220)", "rgb(140,255,180)"];
+
+// Static shades per set (64 each)
+let colorMode = "velocity"; // "velocity", "static", or "desert"
+let brightMode = "dynamic"; // "dynamic" or "full"
+const staticColors = new Uint8Array(MAX_PARTICLES);
+const particleSet = new Uint8Array(MAX_PARTICLES);
+
+function buildStaticPalette64(rMin, rMax, gMin, gMax, bMin, bMax) {
+  const pal = [];
+  for (let i = 0; i < 64; i++) {
+    const t = i / 63;
+    const r = rMin + (rMax - rMin) * t | 0;
+    const g = gMin + (gMax - gMin) * t | 0;
+    const b = bMin + (bMax - bMin) * t | 0;
+    pal.push("rgba(" + r + "," + g + "," + b + ",0.8)");
+  }
+  return pal;
+}
+const setStaticPalettes = [
+  buildStaticPalette64(80, 160, 140, 200, 220, 255),   // blue shades
+  buildStaticPalette64(180, 255, 80, 160, 180, 255),    // magenta shades
+  buildStaticPalette64(80, 160, 200, 255, 120, 180)     // green shades
+];
+
+function assignStaticColors(start, end) {
+  for (let i = start; i < end; i++) {
+    staticColors[i] = (Math.random() * 64) | 0;
+  }
+}
+
 // Touch state
 let touchActive = false;
 let touchX = 0, touchY = 0;
@@ -141,37 +298,37 @@ const gActive = new Uint8Array(GRID_SIZE);
 const activeIdx = new Int32Array(GRID_SIZE);
 
 // --- Particle arrays (struct of arrays for performance) ---
-const px_pos = new Float32Array(NUM_PARTICLES);
-const py_pos = new Float32Array(NUM_PARTICLES);
-const pu_vel = new Float32Array(NUM_PARTICLES);
-const pv_vel = new Float32Array(NUM_PARTICLES);
-const ppu = new Float32Array(NUM_PARTICLES);
-const ppv = new Float32Array(NUM_PARTICLES);
+const px_pos = new Float32Array(MAX_PARTICLES);
+const py_pos = new Float32Array(MAX_PARTICLES);
+const pu_vel = new Float32Array(MAX_PARTICLES);
+const pv_vel = new Float32Array(MAX_PARTICLES);
+const ppu = new Float32Array(MAX_PARTICLES);
+const ppv = new Float32Array(MAX_PARTICLES);
 
-const pT00 = new Float32Array(NUM_PARTICLES);
-const pT01 = new Float32Array(NUM_PARTICLES);
-const pT11 = new Float32Array(NUM_PARTICLES);
+const pT00 = new Float32Array(MAX_PARTICLES);
+const pT01 = new Float32Array(MAX_PARTICLES);
+const pT11 = new Float32Array(MAX_PARTICLES);
 
-const pcx = new Int32Array(NUM_PARTICLES);
-const pcy = new Int32Array(NUM_PARTICLES);
+const pcx = new Int32Array(MAX_PARTICLES);
+const pcy = new Int32Array(MAX_PARTICLES);
 
 // Basis function values per particle (3 each)
-const ppx0 = new Float32Array(NUM_PARTICLES);
-const ppx1 = new Float32Array(NUM_PARTICLES);
-const ppx2 = new Float32Array(NUM_PARTICLES);
-const ppy0 = new Float32Array(NUM_PARTICLES);
-const ppy1 = new Float32Array(NUM_PARTICLES);
-const ppy2 = new Float32Array(NUM_PARTICLES);
-const pgx0 = new Float32Array(NUM_PARTICLES);
-const pgx1 = new Float32Array(NUM_PARTICLES);
-const pgx2 = new Float32Array(NUM_PARTICLES);
-const pgy0 = new Float32Array(NUM_PARTICLES);
-const pgy1 = new Float32Array(NUM_PARTICLES);
-const pgy2 = new Float32Array(NUM_PARTICLES);
+const ppx0 = new Float32Array(MAX_PARTICLES);
+const ppx1 = new Float32Array(MAX_PARTICLES);
+const ppx2 = new Float32Array(MAX_PARTICLES);
+const ppy0 = new Float32Array(MAX_PARTICLES);
+const ppy1 = new Float32Array(MAX_PARTICLES);
+const ppy2 = new Float32Array(MAX_PARTICLES);
+const pgx0 = new Float32Array(MAX_PARTICLES);
+const pgx1 = new Float32Array(MAX_PARTICLES);
+const pgx2 = new Float32Array(MAX_PARTICLES);
+const pgy0 = new Float32Array(MAX_PARTICLES);
+const pgy1 = new Float32Array(MAX_PARTICLES);
+const pgy2 = new Float32Array(MAX_PARTICLES);
 
 
 function initParticles() {
-  for (let i = 0; i < NUM_PARTICLES; i++) {
+  for (let i = 0; i < BATCH_SIZE; i++) {
     px_pos[i] = 5 + Math.random() * (GRID_W - 10);
     py_pos[i] = 5 + Math.random() * (GRID_H / 4);
     pu_vel[i] = 0;
@@ -181,6 +338,33 @@ function initParticles() {
     pT00[i] = 0;
     pT01[i] = 0;
     pT11[i] = 0;
+    particleSet[i] = 0;
+  }
+}
+
+function spawnParticles() {
+  if (numParticles + BATCH_SIZE > MAX_PARTICLES) return; // at capacity
+  const setId = numSets;
+  const start = numParticles;
+  const end = start + BATCH_SIZE;
+  for (let i = start; i < end; i++) {
+    px_pos[i] = 5 + Math.random() * (GRID_W - 10);
+    py_pos[i] = 5 + Math.random() * (GRID_H / 4);
+    pu_vel[i] = 0;
+    pv_vel[i] = 0;
+    ppu[i] = 0;
+    ppv[i] = 0;
+    pT00[i] = 0;
+    pT01[i] = 0;
+    pT11[i] = 0;
+    particleSet[i] = setId;
+  }
+  assignStaticColors(start, end);
+  numParticles = end;
+  numSets++;
+  // Update spawn button
+  if (numParticles >= MAX_PARTICLES) {
+    document.getElementById("spawnBtn").style.display = "none";
   }
 }
 
@@ -203,9 +387,19 @@ function idx(i, j) {
 function simulate() {
   clearGrid();
 
+  // Compute inertial impulse from gravity vector change
+  // When the phone tilts, gravity changes direction in screen space.
+  // The fluid should resist this rotation (it has inertia in world space).
+  const dgx = gravityX - prevGravityX;
+  const dgy = gravityY - prevGravityY;
+  inertiaX = inertiaX * INERTIA_DECAY - dgx * INERTIA_STRENGTH;
+  inertiaY = inertiaY * INERTIA_DECAY - dgy * INERTIA_STRENGTH;
+  prevGravityX = gravityX;
+  prevGravityY = gravityY;
+
   const GW = GRID_W;
   const GH = GRID_H;
-  const NP = NUM_PARTICLES;
+  const NP = numParticles;
 
   // ---- Pass 1: Particle to Grid ----
   for (let ip = 0; ip < NP; ip++) {
@@ -452,10 +646,14 @@ function simulate() {
     pu += gravityX;
     pv += gravityY;
 
+    // Apply inertial counter-force (fluid resists phone rotation)
+    pu += inertiaX;
+    pv += inertiaY;
+
     // Apply shake impulse
     if (shakeImpulse > 0) {
-      pu += (Math.random() - 0.5) * shakeImpulse * 0.4;
-      pv += (Math.random() - 0.5) * shakeImpulse * 0.4;
+      pu += (Math.random() - 0.5) * shakeImpulse * 0.04;
+      pv += (Math.random() - 0.5) * shakeImpulse * 0.04;
     }
 
     // Touch interaction
@@ -546,43 +744,104 @@ function simulate() {
 
 // --- Rendering ---
 function render() {
-  // Slight fade for motion trails instead of full clear
-  ctx.fillStyle = "rgba(6,4,16,0.35)";
+  ctx.fillStyle = colorMode === "desert" ? "#14100a" : "#0a0a14";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  // Batch particles by color bucket for fewer state changes
-  // Use 16 buckets across the palette
-  const BUCKETS = 32;
-  const buckets = new Array(BUCKETS);
-  for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
+  ctx.lineWidth = 1.0;
 
-  for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-    const uv = pu_vel[ip];
-    const vv = pv_vel[ip];
-    const speed = Math.sqrt(uv * uv + vv * vv);
-    // Map speed 0..0.5 -> palette index 0..255
-    const ci = Math.min(255, (speed * 512) | 0);
-    const bucket = (ci * BUCKETS / 256) | 0;
-    buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
-  }
+  const useBright = brightMode === "full";
 
-  ctx.lineWidth = 1.4;
-  for (let b = 0; b < BUCKETS; b++) {
-    const list = buckets[b];
-    if (list.length === 0) continue;
-    const ci = ((b + 0.5) / BUCKETS * 256) | 0;
-    ctx.strokeStyle = palette[Math.min(ci, 255)];
-    ctx.beginPath();
-    for (let k = 0; k < list.length; k++) {
-      const ip = list[k];
-      const x = px_pos[ip] * scaleX;
-      const y = py_pos[ip] * scaleY;
-      const dx = pu_vel[ip] * scaleX * 2;
-      const dy = pv_vel[ip] * scaleY * 2;
-      ctx.moveTo(x, y);
-      ctx.lineTo(x - dx, y - dy);
+  const NP = numParticles;
+  const NS = numSets;
+
+  if (useBright) {
+    // Full brightness: uniform color per set, fixed-length strokes
+    const fixedLen = 2.0;
+    const minSpeed = 0.05;
+    var brightLookup = colorMode === "desert" ? setBrightDesert :
+                       colorMode === "static" ? setBrightOcean : setBrightColors;
+    for (let sid = 0; sid < NS; sid++) {
+      ctx.strokeStyle = brightLookup[sid] || setBrightColors[sid] || "rgb(200,220,255)";
+      ctx.beginPath();
+      for (let ip = 0; ip < NP; ip++) {
+        if (particleSet[ip] !== sid) continue;
+        const x = px_pos[ip] * scaleX;
+        const y = py_pos[ip] * scaleY;
+        const uv = pu_vel[ip];
+        const vv = pv_vel[ip];
+        const speed = Math.sqrt(uv * uv + vv * vv);
+        let dx, dy;
+        if (speed > minSpeed) {
+          dx = (uv / speed) * fixedLen * scaleX;
+          dy = (vv / speed) * fixedLen * scaleY;
+        } else {
+          const halfLen = fixedLen * 0.4;
+          dx = halfLen * scaleX;
+          dy = 0;
+        }
+        ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
+        ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
+  } else if (colorMode === "velocity" || colorMode === "desert") {
+    // Velocity-mapped colors per set
+    var palLookup = colorMode === "desert" ? setDesertPalettes : setVelPalettes;
+    const BUCKETS = 32;
+    for (let sid = 0; sid < NS; sid++) {
+      const pal = palLookup[sid] || palette;
+      const buckets = new Array(BUCKETS);
+      for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
+
+      for (let ip = 0; ip < NP; ip++) {
+        if (particleSet[ip] !== sid) continue;
+        const uv = pu_vel[ip];
+        const vv = pv_vel[ip];
+        const speed = Math.sqrt(uv * uv + vv * vv);
+        const ci = Math.min(255, (speed * 512) | 0);
+        const bucket = (ci * BUCKETS / 256) | 0;
+        buckets[Math.min(bucket, BUCKETS - 1)].push(ip);
+      }
+
+      for (let b = 0; b < BUCKETS; b++) {
+        const list = buckets[b];
+        if (list.length === 0) continue;
+        const ci = ((b + 0.5) / BUCKETS * 256) | 0;
+        ctx.strokeStyle = pal[Math.min(ci, 255)];
+        ctx.beginPath();
+        for (let k = 0; k < list.length; k++) {
+          const ip = list[k];
+          const x = px_pos[ip] * scaleX;
+          const y = py_pos[ip] * scaleY;
+          const dx = pu_vel[ip] * scaleX * 2;
+          const dy = pv_vel[ip] * scaleY * 2;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - dx, y - dy);
+        }
+        ctx.stroke();
+      }
+    }
+  } else {
+    // Static shades per set
+    for (let sid = 0; sid < NS; sid++) {
+      const sPal = setStaticPalettes[sid] || setStaticPalettes[0];
+      for (let s = 0; s < 64; s++) {
+        ctx.strokeStyle = sPal[s];
+        ctx.beginPath();
+        let any = false;
+        for (let ip = 0; ip < NP; ip++) {
+          if (particleSet[ip] !== sid || staticColors[ip] !== s) continue;
+          any = true;
+          const x = px_pos[ip] * scaleX;
+          const y = py_pos[ip] * scaleY;
+          const dx = pu_vel[ip] * scaleX * 2;
+          const dy = pv_vel[ip] * scaleY * 2;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - dx, y - dy);
+        }
+        if (any) ctx.stroke();
+      }
+    }
   }
 
   // Gravity direction indicator (small dot + line, no circle)
@@ -679,7 +938,7 @@ function handleOrientation(e) {
   // Convert tilt angles to gravity vector
   // gamma controls X gravity (tilt left/right)
   // beta controls Y gravity (tilt forward/back)
-  const GRAVITY_SCALE = 0.05;
+  const GRAVITY_SCALE = 0.005;
   const MAX_ANGLE = 60; // clamp angles
 
   const clampedGamma = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, orientGamma));
@@ -774,7 +1033,7 @@ function loop(timestamp) {
     } else {
       sensorStatus = "desktop mode";
     }
-    hud.textContent = fps + " fps | " + NUM_PARTICLES + " particles | " + sensorStatus;
+    hud.textContent = fps + " fps | " + numParticles + " particles | " + sensorStatus;
   }
 
   requestAnimationFrame(loop);
@@ -792,6 +1051,11 @@ document.getElementById("startBtn").addEventListener("click", async function() {
 
   resize();
   initParticles();
+  assignStaticColors(0, BATCH_SIZE);
+
+  document.getElementById("colorBtn").style.display = "block";
+  document.getElementById("brightBtn").style.display = "block";
+  document.getElementById("spawnBtn").style.display = "block";
 
   await enableSensors();
 
@@ -799,6 +1063,71 @@ document.getElementById("startBtn").addEventListener("click", async function() {
   lastFpsTime = performance.now();
   requestAnimationFrame(loop);
 });
+
+// --- Button helper: debounced handler prevents touchend+click double-fire ---
+function onTap(el, fn) {
+  var last = 0;
+  function guard(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var now = Date.now();
+    if (now - last < 300) return; // debounce 300ms
+    last = now;
+    fn();
+  }
+  el.addEventListener("touchend", guard, { passive: false });
+  el.addEventListener("click", guard);
+}
+
+// --- Color mode toggle ---
+var colorModes = ["velocity", "static", "desert"];
+var colorLabels = { velocity: "velocity", static: "ocean", desert: "desert" };
+onTap(document.getElementById("colorBtn"), function() {
+  var idx = colorModes.indexOf(colorMode);
+  colorMode = colorModes[(idx + 1) % colorModes.length];
+  document.getElementById("colorBtn").textContent = "Color: " + colorLabels[colorMode];
+});
+
+// --- Brightness mode toggle ---
+onTap(document.getElementById("brightBtn"), function() {
+  brightMode = brightMode === "dynamic" ? "full" : "dynamic";
+  document.getElementById("brightBtn").textContent = "Vel dim: " + (brightMode === "dynamic" ? "on" : "off");
+});
+
+// --- Spawn button ---
+onTap(document.getElementById("spawnBtn"), function() {
+  spawnParticles();
+});
+
+// --- Reload button ---
+onTap(document.getElementById("reloadBtn"), function() {
+  window.location.reload();
+});
+
+// --- Update detection via polling ---
+(function() {
+  let initialContent = null;
+  // Use pathname (not href) to avoid hash/query issues, plus cache-bust param
+  // to bypass GitHub Pages CDN edge cache (ignores cache: "no-store")
+  var basePath = window.location.origin + window.location.pathname;
+
+  function checkForUpdate() {
+    var url = basePath + "?_cb=" + Date.now();
+    fetch(url, { cache: "no-store" }).then(function(r) {
+      return r.text();
+    }).then(function(text) {
+      if (initialContent === null) {
+        initialContent = text;
+      } else if (text !== initialContent) {
+        document.getElementById("reloadBtn").style.display = "block";
+      }
+    }).catch(function() {});
+  }
+
+  // Snapshot current version after a short delay, then poll every 30s
+  setTimeout(checkForUpdate, 3000);
+  setInterval(checkForUpdate, 30000);
+})();
 </script>
 </body>
 </html>
