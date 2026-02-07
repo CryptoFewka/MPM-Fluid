@@ -980,13 +980,16 @@ function handleOrientation(e) {
 
 // --- Sensor: DeviceMotion (shake detection + linear acceleration) ---
 function handleMotion(e) {
-  const acc = e.accelerationIncludingGravity || e.acceleration;
-  if (!acc) return;
+  // Use gravity-free acceleration for both shake and linear force.
+  // accelerationIncludingGravity causes false shake triggers during tilt changes.
+  const acc = e.acceleration;
+  if (!acc || acc.x == null) return;
 
   const ax = acc.x || 0;
   const ay = acc.y || 0;
   const az = acc.z || 0;
 
+  // Shake detection
   const delta = Math.abs(ax - lastAccX) + Math.abs(ay - lastAccY) + Math.abs(az - lastAccZ);
   lastAccX = ax;
   lastAccY = ay;
@@ -994,22 +997,18 @@ function handleMotion(e) {
 
   if (delta > shakeThreshold) {
     shakeImpulse = Math.min(delta, 80);
-    // Visual feedback
     const flash = document.getElementById("shake-flash");
     flash.style.opacity = "1";
     setTimeout(function() { flash.style.opacity = "0"; }, 200);
   }
 
-  // Linear acceleration: phone moving through space
-  // e.acceleration gives device acceleration without gravity (pure translational)
-  const lin = e.acceleration;
-  if (lin && lin.x != null) {
-    // In phone reference frame, if phone accelerates right (lin.x > 0),
-    // particles feel pseudo-force to the LEFT (negative x).
-    // Phone portrait: lin.x → screen X, lin.y → screen -Y (up on phone = +y in API)
-    linAccelX = -lin.x * LIN_ACCEL_STRENGTH;
-    linAccelY = lin.y * LIN_ACCEL_STRENGTH;
-  }
+  // Linear acceleration: phone moving through space.
+  // Clamp magnitude to avoid extreme forces from sensor noise / gravity leakage.
+  const MAX_ACCEL = 6; // m/s² cap (gentle push ≈ 2-3, brisk ≈ 5-6)
+  const clampedX = Math.max(-MAX_ACCEL, Math.min(MAX_ACCEL, ax));
+  const clampedY = Math.max(-MAX_ACCEL, Math.min(MAX_ACCEL, ay));
+  linAccelX = -clampedX * LIN_ACCEL_STRENGTH;
+  linAccelY = clampedY * LIN_ACCEL_STRENGTH;
 
   // Z-axis rotation: spinning the phone flat
   const rot = e.rotationRate;
