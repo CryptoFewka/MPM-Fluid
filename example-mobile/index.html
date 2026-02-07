@@ -985,9 +985,13 @@ onTap(document.getElementById("reloadBtn"), function() {
 // --- Update detection via polling ---
 (function() {
   let initialContent = null;
+  // Use pathname (not href) to avoid hash/query issues, plus cache-bust param
+  // to bypass GitHub Pages CDN edge cache (ignores cache: "no-store")
+  var basePath = window.location.origin + window.location.pathname;
 
   function checkForUpdate() {
-    fetch(window.location.href, { cache: "no-store" }).then(function(r) {
+    var url = basePath + "?_cb=" + Date.now();
+    fetch(url, { cache: "no-store" }).then(function(r) {
       return r.text();
     }).then(function(text) {
       if (initialContent === null) {
