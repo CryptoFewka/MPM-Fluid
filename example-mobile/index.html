@@ -37,14 +37,25 @@ canvas {
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 #startBtn:active { background: #1976D2; }
-#colorBtn {
-  position: fixed; bottom: 12px; right: 12px;
+.ctrl-btn {
+  position: fixed; bottom: 12px;
   background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7);
   border: 1px solid rgba(255,255,255,0.25); border-radius: 20px;
   padding: 8px 16px; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
   cursor: pointer; z-index: 6; -webkit-tap-highlight-color: transparent;
 }
-#colorBtn:active { background: rgba(255,255,255,0.25); }
+.ctrl-btn:active { background: rgba(255,255,255,0.25); }
+#colorBtn { right: 12px; }
+#brightBtn { right: 140px; }
+#reloadBtn {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  background: #2196F3; color: #fff; border: none; border-radius: 28px;
+  padding: 16px 36px; font-size: 18px; font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: pointer; z-index: 20; -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 4px 24px rgba(33,150,243,0.5);
+}
+#reloadBtn:active { background: #1976D2; }
 #hud {
   position: fixed; top: 8px; left: 8px;
   color: rgba(255,255,255,0.5); font-family: monospace; font-size: 11px;
@@ -62,7 +73,9 @@ canvas {
 <canvas id="c"></canvas>
 <div id="shake-flash"></div>
 <div id="hud"></div>
-<button id="colorBtn" style="display:none">Color: velocity</button>
+<button id="brightBtn" class="ctrl-btn" style="display:none">Bright: dynamic</button>
+<button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
+<button id="reloadBtn" style="display:none">Update Available - Reload</button>
 <div id="overlay">
   <h1>MPM Fluid Simulation</h1>
   <p>Tilt your phone to change gravity direction. Shake to disturb the fluid. Touch and drag to push particles.</p>
@@ -120,8 +133,36 @@ function buildPalette() {
 }
 buildPalette();
 
+// Full-brightness velocity palette (same hues, all equally bright)
+const paletteBright = [];
+function buildBrightPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {
+      const s = t / 0.2;
+      r = 100; g = 160 + 60 * s; b = 240 + 15 * s;
+    } else if (t < 0.4) {
+      const s = (t - 0.2) / 0.2;
+      r = 100 + 30 * s; g = 220 + 35 * s; b = 255 - 50 * s;
+    } else if (t < 0.6) {
+      const s = (t - 0.4) / 0.2;
+      r = 130 + 125 * s; g = 255; b = 205 - 125 * s;
+    } else if (t < 0.8) {
+      const s = (t - 0.6) / 0.2;
+      r = 255; g = 255 - 80 * s; b = 80 + 100 * s;
+    } else {
+      const s = (t - 0.8) / 0.2;
+      r = 255; g = 175 + 80 * s; b = 180 + 75 * s;
+    }
+    paletteBright.push("rgb(" + (r|0) + "," + (g|0) + "," + (b|0) + ")");
+  }
+}
+buildBrightPalette();
+
 // Static blue shades - one per particle, assigned at init
 let colorMode = "velocity"; // "velocity" or "static"
+let brightMode = "dynamic"; // "dynamic" or "full"
 const staticColors = new Uint8Array(NUM_PARTICLES);
 function assignStaticColors() {
   for (let i = 0; i < NUM_PARTICLES; i++) {
@@ -596,8 +637,10 @@ function render() {
 
   ctx.lineWidth = 1.0;
 
+  const useBright = brightMode === "full";
+
   if (colorMode === "velocity") {
-    // Batch particles by velocity color bucket
+    const pal = useBright ? paletteBright : palette;
     const BUCKETS = 32;
     const buckets = new Array(BUCKETS);
     for (let b = 0; b < BUCKETS; b++) buckets[b] = [];
@@ -615,7 +658,7 @@ function render() {
       const list = buckets[b];
       if (list.length === 0) continue;
       const ci = ((b + 0.5) / BUCKETS * 256) | 0;
-      ctx.strokeStyle = palette[Math.min(ci, 255)];
+      ctx.strokeStyle = pal[Math.min(ci, 255)];
       ctx.beginPath();
       for (let k = 0; k < list.length; k++) {
         const ip = list[k];
@@ -629,14 +672,11 @@ function render() {
       ctx.stroke();
     }
   } else {
-    // Static blue: batch by the 64 shade buckets
-    for (let s = 0; s < 64; s++) {
-      ctx.strokeStyle = staticPalette[s];
+    // Static blue: single color when full bright, shaded when dynamic
+    if (useBright) {
+      ctx.strokeStyle = "rgb(140,200,255)";
       ctx.beginPath();
-      let any = false;
       for (let ip = 0; ip < NUM_PARTICLES; ip++) {
-        if (staticColors[ip] !== s) continue;
-        any = true;
         const x = px_pos[ip] * scaleX;
         const y = py_pos[ip] * scaleY;
         const dx = pu_vel[ip] * scaleX * 2;
@@ -644,7 +684,24 @@ function render() {
         ctx.moveTo(x, y);
         ctx.lineTo(x - dx, y - dy);
       }
-      if (any) ctx.stroke();
+      ctx.stroke();
+    } else {
+      for (let s = 0; s < 64; s++) {
+        ctx.strokeStyle = staticPalette[s];
+        ctx.beginPath();
+        let any = false;
+        for (let ip = 0; ip < NUM_PARTICLES; ip++) {
+          if (staticColors[ip] !== s) continue;
+          any = true;
+          const x = px_pos[ip] * scaleX;
+          const y = py_pos[ip] * scaleY;
+          const dx = pu_vel[ip] * scaleX * 2;
+          const dy = pv_vel[ip] * scaleY * 2;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - dx, y - dy);
+        }
+        if (any) ctx.stroke();
+      }
     }
   }
 
@@ -858,6 +915,7 @@ document.getElementById("startBtn").addEventListener("click", async function() {
   assignStaticColors();
 
   document.getElementById("colorBtn").style.display = "block";
+  document.getElementById("brightBtn").style.display = "block";
 
   await enableSensors();
 
@@ -871,6 +929,33 @@ document.getElementById("colorBtn").addEventListener("click", function() {
   colorMode = colorMode === "velocity" ? "static" : "velocity";
   this.textContent = "Color: " + (colorMode === "velocity" ? "velocity" : "ocean");
 });
+
+// --- Brightness mode toggle ---
+document.getElementById("brightBtn").addEventListener("click", function() {
+  brightMode = brightMode === "dynamic" ? "full" : "dynamic";
+  this.textContent = "Bright: " + brightMode;
+});
+
+// --- Reload button ---
+document.getElementById("reloadBtn").addEventListener("click", function() {
+  window.location.reload();
+});
+
+// --- Service Worker for update detection ---
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").then(function(reg) {
+    reg.addEventListener("updatefound", function() {
+      const newWorker = reg.installing;
+      newWorker.addEventListener("statechange", function() {
+        if (newWorker.state === "activated" && navigator.serviceWorker.controller) {
+          document.getElementById("reloadBtn").style.display = "block";
+        }
+      });
+    });
+    // Also check periodically for updates (every 60s)
+    setInterval(function() { reg.update(); }, 60000);
+  });
+}
 </script>
 </body>
 </html>
