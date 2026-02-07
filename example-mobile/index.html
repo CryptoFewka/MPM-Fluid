@@ -57,6 +57,7 @@ canvas {
 <div id="overlay">
   <h1>MPM Fluid Simulation</h1>
   <p>Tilt your phone to change gravity direction. Shake to disturb the fluid. Touch and drag to push particles.</p>
+  <p id="https-warn" style="display:none; color:#f80; font-size:12px;">Sensors require HTTPS. Serve this page over HTTPS for tilt/shake support.</p>
   <button id="startBtn">Start Simulation</button>
 </div>
 <script>
@@ -92,6 +93,7 @@ let prevTouchX = 0, prevTouchY = 0;
 
 // Sensor state
 let sensorEnabled = false;
+let sensorReceived = false; // true once we get at least one orientation event
 let orientBeta = 0, orientGamma = 0;
 let shakeThreshold = 25;
 let lastAccX = 0, lastAccY = 0, lastAccZ = 0;
@@ -649,6 +651,7 @@ canvas.addEventListener("mouseup", function() { touchActive = false; });
 
 // --- Sensor: DeviceOrientation (tilt → gravity direction) ---
 function handleOrientation(e) {
+  sensorReceived = true;
   // beta: front-back tilt (-180 to 180), gamma: left-right tilt (-90 to 90)
   orientBeta = e.beta || 0;
   orientGamma = e.gamma || 0;
@@ -743,13 +746,25 @@ function loop(timestamp) {
     frameCount = 0;
     lastFpsTime = timestamp;
     const hud = document.getElementById("hud");
-    const sensorStatus = sensorEnabled ? "active" : "desktop mode";
-    hud.textContent = fps + " fps | " + NUM_PARTICLES + " particles | sensors: " + sensorStatus;
+    let sensorStatus;
+    if (sensorReceived) {
+      sensorStatus = "tilt active";
+    } else if (sensorEnabled) {
+      sensorStatus = "waiting for data (need HTTPS?)";
+    } else {
+      sensorStatus = "desktop mode";
+    }
+    hud.textContent = fps + " fps | " + NUM_PARTICLES + " particles | " + sensorStatus;
   }
 
   requestAnimationFrame(loop);
 }
 
+
+// --- HTTPS warning for sensor APIs ---
+if (window.isSecureContext === false) {
+  document.getElementById("https-warn").style.display = "block";
+}
 
 // --- Start button ---
 document.getElementById("startBtn").addEventListener("click", async function() {
