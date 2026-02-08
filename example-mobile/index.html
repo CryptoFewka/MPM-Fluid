@@ -502,7 +502,7 @@ function updateFood() {
           pT11[np] = 0;
           particleSet[np] = 0;
           pMass[np] = setMass[0];
-          pCanEatTime[np] = now + 1000; // 1 second eat cooldown
+          pCanEatTime[np] = 0;
           staticColors[np] = (Math.random() * 64) | 0;
           numParticles++;
         }
