@@ -352,7 +352,7 @@ const pCanEatTime = new Float64Array(MAX_PARTICLES);
 
 // --- Food pellet system ---
 const MAX_FOOD = 50;
-const FOOD_START_CHARGES = 25000;
+const FOOD_START_CHARGES = 250;
 const FOOD_BASE_RADIUS = 2.0; // collision radius at full charges (grid units)
 const FOOD_MIN_RADIUS = 0.5;  // minimum collision radius (grid units)
 const FOOD_IMPULSE = 5.0;     // rocket impulse strength per consumption event
@@ -440,6 +440,9 @@ function updateFood() {
     let fy = foodY[fi];
     const charges = foodCharges[fi];
 
+    // Food mass: heavy when full (sinks like heaviest particles), light when depleted
+    const foodMass = 0.5 + (charges / FOOD_START_CHARGES) * 2.5; // 3.0 full → 0.5 empty
+
     // Effective collision radius shrinks with remaining charges
     const chargeRatio = Math.sqrt(charges / FOOD_START_CHARGES);
     const effRadius = FOOD_MIN_RADIUS + (FOOD_BASE_RADIUS - FOOD_MIN_RADIUS) * chargeRatio;
@@ -463,13 +466,14 @@ function updateFood() {
     const gridU = gu[n00] * w00 + gu[n10] * w10 + gu[n01] * w01 + gu[n11] * w11;
     const gridV = gv[n00] * w00 + gv[n10] * w10 + gv[n01] * w01 + gv[n11] * w11;
 
-    // Drag food toward fluid velocity (carried by the flow)
-    foodVX[fi] += 0.15 * (gridU - foodVX[fi]);
-    foodVY[fi] += 0.15 * (gridV - foodVY[fi]);
+    // Drag food toward fluid velocity; lighter food gets carried more by the flow
+    const drag = 0.3 / foodMass;
+    foodVX[fi] += drag * (gridU - foodVX[fi]);
+    foodVY[fi] += drag * (gridV - foodVY[fi]);
 
-    // Apply gravity
-    foodVX[fi] += gravityX;
-    foodVY[fi] += gravityY;
+    // Gravity scaled by mass (matches particle physics: pu += gravityX * mass)
+    foodVX[fi] += gravityX * foodMass;
+    foodVY[fi] += gravityY * foodMass;
 
     // --- Check collisions with particles (eating + rocket impulse) ---
     const np0 = numParticles; // snapshot: don't check newly spawned particles this frame
@@ -483,18 +487,22 @@ function updateFood() {
 
         // Rocket impulse: push food away from the eating particle
         const dist = Math.sqrt(dx * dx + dy * dy) + 0.01;
+        const nx = dx / dist;
+        const ny = dy / dist;
         const accel = FOOD_IMPULSE / Math.max(1, foodCharges[fi]);
-        foodVX[fi] -= (dx / dist) * accel;
-        foodVY[fi] -= (dy / dist) * accel;
+        foodVX[fi] -= nx * accel;
+        foodVY[fi] -= ny * accel;
 
-        // Spawn 3 new particles at food location
+        // Spawn 3 new particles at the contact point (food edge facing eater)
         for (let k = 0; k < 3; k++) {
           if (numParticles >= MAX_PARTICLES) break;
           const np = numParticles;
-          px_pos[np] = Math.max(WALL_MIN_X, Math.min(WALL_MAX_X, fx + (Math.random() - 0.5) * 1.0));
-          py_pos[np] = Math.max(WALL_MIN_Y, Math.min(WALL_MAX_Y, fy + (Math.random() - 0.5) * 1.0));
-          pu_vel[np] = (Math.random() - 0.5) * 0.3;
-          pv_vel[np] = (Math.random() - 0.5) * 0.3;
+          px_pos[np] = Math.max(WALL_MIN_X, Math.min(WALL_MAX_X,
+            fx + nx * effRadius * 0.8 + (Math.random() - 0.5) * 0.3));
+          py_pos[np] = Math.max(WALL_MIN_Y, Math.min(WALL_MAX_Y,
+            fy + ny * effRadius * 0.8 + (Math.random() - 0.5) * 0.3));
+          pu_vel[np] = nx * 0.2 + (Math.random() - 0.5) * 0.1;
+          pv_vel[np] = ny * 0.2 + (Math.random() - 0.5) * 0.1;
           ppu[np] = 0;
           ppv[np] = 0;
           pT00[np] = 0;
@@ -513,10 +521,6 @@ function updateFood() {
     }
 
     if (!foodActive[fi]) continue;
-
-    // Velocity damping
-    foodVX[fi] *= 0.97;
-    foodVY[fi] *= 0.97;
 
     // Update position
     fx += foodVX[fi];
