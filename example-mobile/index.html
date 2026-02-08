@@ -422,7 +422,7 @@ function dispenseFood() {
     slot = numFood++;
   }
   foodX[slot] = WALL_MIN_X + 2 + Math.random() * (VIEW_W - 4);
-  foodY[slot] = WALL_MIN_Y + 2 + Math.random() * (VIEW_H - 4);
+  foodY[slot] = WALL_MIN_Y + 1;
   foodCharges[slot] = FOOD_START_CHARGES;
   foodActive[slot] = 1;
   foodVX[slot] = 0;
