@@ -49,7 +49,15 @@ canvas {
 #brightBtn { right: 140px; }
 #spawnBtn { left: 12px; }
 #resetBtn { left: 100px; }
-#foodBtn { left: 200px; }
+.side-btn {
+  position: fixed; right: 12px;
+  background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.25); border-radius: 20px;
+  padding: 8px 16px; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: pointer; z-index: 6; -webkit-tap-highlight-color: transparent;
+}
+.side-btn:active { background: rgba(255,255,255,0.25); }
+#foodBtn { top: 60px; }
 #reloadBtn {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   background: #2196F3; color: #fff; border: none; border-radius: 28px;
@@ -77,7 +85,7 @@ canvas {
 <div id="shake-flash"></div>
 <div id="hud"></div>
 <button id="resetBtn" class="ctrl-btn" style="display:none">Reset</button>
-<button id="foodBtn" class="ctrl-btn" style="display:none">Food</button>
+<button id="foodBtn" class="side-btn" style="display:none">Food</button>
 <button id="spawnBtn" class="ctrl-btn" style="display:none">Spawn</button>
 <button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
 <button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
