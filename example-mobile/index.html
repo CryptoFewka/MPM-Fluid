@@ -996,14 +996,23 @@ function handleMotion(e) {
   linAccelY = clampedY * LIN_ACCEL_STRENGTH;
 
   // Z-axis rotation: spinning the phone flat.
-  // Attenuate when phone is tilted (|beta| > 30°) because gimbal lock near
-  // vertical makes the Z-axis rotation rate unreliable and produces large
-  // phantom values that overwhelm gravity.
+  // Two attenuation factors prevent phantom spin during tilt transitions:
+  // 1) Gimbal lock: as the phone tilts away from flat, the Euler decomposition
+  //    leaks physical X-axis rotation into the Z-axis (alpha) channel, creating
+  //    large phantom spin values.  Attenuate starting at just 15° tilt.
+  // 2) Active tilting: when beta/gamma rotation rates are high the phone is
+  //    being tilted, not spun.  Suppress alpha to avoid the leaked signal.
   const rot = e.rotationRate;
   if (rot && rot.alpha != null) {
     const tilt = Math.abs(orientBeta);
-    const spinAtten = tilt < 30 ? 1.0 : tilt < 60 ? 1.0 - (tilt - 30) / 30 : 0.0;
-    spinRate = rot.alpha * spinAtten; // degrees/second around Z axis
+    const spinAtten = tilt < 15 ? 1.0 : tilt < 40 ? 1.0 - (tilt - 15) / 25 : 0.0;
+
+    const tiltRate = Math.abs(rot.beta || 0) + Math.abs(rot.gamma || 0);
+    const tiltSuppression = tiltRate < 15 ? 1.0
+                          : tiltRate < 50 ? 1.0 - (tiltRate - 15) / 35
+                          : 0.0;
+
+    spinRate = rot.alpha * spinAtten * tiltSuppression;
   }
 }
 
