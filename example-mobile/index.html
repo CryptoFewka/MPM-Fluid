@@ -465,13 +465,16 @@ function updateFood() {
     const w11 = u * v;
     const gridU = gu[n00] * w00 + gu[n10] * w10 + gu[n01] * w01 + gu[n11] * w11;
     const gridV = gv[n00] * w00 + gv[n10] * w10 + gv[n01] * w01 + gv[n11] * w11;
+    const gridMass = gm[n00] * w00 + gm[n10] * w10 + gm[n01] * w01 + gm[n11] * w11;
 
-    // Drag food toward fluid velocity; lighter food gets carried more by the flow
-    const drag = 0.3 / foodMass;
-    foodVX[fi] += drag * (gridU - foodVX[fi]);
-    foodVY[fi] += drag * (gridV - foodVY[fi]);
+    // Only apply fluid drag when submerged (grid has mass = fluid present)
+    if (gridMass > 0.1) {
+      const drag = 0.3 / foodMass;
+      foodVX[fi] += drag * (gridU - foodVX[fi]);
+      foodVY[fi] += drag * (gridV - foodVY[fi]);
+    }
 
-    // Gravity (constant acceleration regardless of mass)
+    // Gravity (constant acceleration, like freefall — same rate for all masses)
     foodVX[fi] += gravityX;
     foodVY[fi] += gravityY;
 
