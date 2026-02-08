@@ -352,11 +352,14 @@ const pCanEatTime = new Float64Array(MAX_PARTICLES);
 
 // --- Food pellet system ---
 const MAX_FOOD = 50;
-const FOOD_START_CHARGES = 25;
-const FOOD_RADIUS = 2.0; // collision radius in grid units
-const FOOD_RADIUS2 = FOOD_RADIUS * FOOD_RADIUS;
+const FOOD_START_CHARGES = 25000;
+const FOOD_BASE_RADIUS = 2.0; // collision radius at full charges (grid units)
+const FOOD_MIN_RADIUS = 0.5;  // minimum collision radius (grid units)
+const FOOD_IMPULSE = 5.0;     // rocket impulse strength per consumption event
 const foodX = new Float32Array(MAX_FOOD);
 const foodY = new Float32Array(MAX_FOOD);
+const foodVX = new Float32Array(MAX_FOOD);
+const foodVY = new Float32Array(MAX_FOOD);
 const foodCharges = new Int32Array(MAX_FOOD);
 const foodActive = new Uint8Array(MAX_FOOD);
 let numFood = 0;
@@ -422,22 +425,68 @@ function dispenseFood() {
   foodY[slot] = WALL_MIN_Y + 2 + Math.random() * (VIEW_H - 4);
   foodCharges[slot] = FOOD_START_CHARGES;
   foodActive[slot] = 1;
+  foodVX[slot] = 0;
+  foodVY[slot] = 0;
 }
 
-function checkFoodCollisions() {
+function updateFood() {
   const now = performance.now();
+  const GW = GRID_W;
+  const GH = GRID_H;
+
   for (let fi = 0; fi < numFood; fi++) {
     if (!foodActive[fi]) continue;
-    const fx = foodX[fi];
-    const fy = foodY[fi];
+    let fx = foodX[fi];
+    let fy = foodY[fi];
+    const charges = foodCharges[fi];
+
+    // Effective collision radius shrinks with remaining charges
+    const chargeRatio = Math.sqrt(charges / FOOD_START_CHARGES);
+    const effRadius = FOOD_MIN_RADIUS + (FOOD_BASE_RADIUS - FOOD_MIN_RADIUS) * chargeRatio;
+    const er2 = effRadius * effRadius;
+
+    // --- Sample grid velocity at food position (bilinear interpolation) ---
+    const cx0 = fx | 0;
+    const cy0 = fy | 0;
+    const cx0c = Math.max(0, Math.min(cx0, GW - 2));
+    const cy0c = Math.max(0, Math.min(cy0, GH - 2));
+    const u = fx - cx0c;
+    const v = fy - cy0c;
+    const n00 = cx0c * GH + cy0c;
+    const n01 = cx0c * GH + (cy0c + 1);
+    const n10 = (cx0c + 1) * GH + cy0c;
+    const n11 = (cx0c + 1) * GH + (cy0c + 1);
+    const w00 = (1 - u) * (1 - v);
+    const w10 = u * (1 - v);
+    const w01 = (1 - u) * v;
+    const w11 = u * v;
+    const gridU = gu[n00] * w00 + gu[n10] * w10 + gu[n01] * w01 + gu[n11] * w11;
+    const gridV = gv[n00] * w00 + gv[n10] * w10 + gv[n01] * w01 + gv[n11] * w11;
+
+    // Drag food toward fluid velocity (carried by the flow)
+    foodVX[fi] += 0.15 * (gridU - foodVX[fi]);
+    foodVY[fi] += 0.15 * (gridV - foodVY[fi]);
+
+    // Apply gravity
+    foodVX[fi] += gravityX;
+    foodVY[fi] += gravityY;
+
+    // --- Check collisions with particles (eating + rocket impulse) ---
     const np0 = numParticles; // snapshot: don't check newly spawned particles this frame
     for (let ip = 0; ip < np0; ip++) {
       if (foodCharges[fi] <= 0) break;
       if (now < pCanEatTime[ip]) continue;
       const dx = px_pos[ip] - fx;
       const dy = py_pos[ip] - fy;
-      if (dx * dx + dy * dy < FOOD_RADIUS2) {
+      if (dx * dx + dy * dy < er2) {
         foodCharges[fi]--;
+
+        // Rocket impulse: push food away from the eating particle
+        const dist = Math.sqrt(dx * dx + dy * dy) + 0.01;
+        const accel = FOOD_IMPULSE / Math.max(1, foodCharges[fi]);
+        foodVX[fi] -= (dx / dist) * accel;
+        foodVY[fi] -= (dy / dist) * accel;
+
         // Spawn 3 new particles at food location
         for (let k = 0; k < 3; k++) {
           if (numParticles >= MAX_PARTICLES) break;
@@ -462,6 +511,25 @@ function checkFoodCollisions() {
         }
       }
     }
+
+    if (!foodActive[fi]) continue;
+
+    // Velocity damping
+    foodVX[fi] *= 0.97;
+    foodVY[fi] *= 0.97;
+
+    // Update position
+    fx += foodVX[fi];
+    fy += foodVY[fi];
+
+    // Wall bounce
+    if (fx < WALL_MIN_X) { fx = WALL_MIN_X; foodVX[fi] = Math.abs(foodVX[fi]) * 0.5; }
+    else if (fx > WALL_MAX_X) { fx = WALL_MAX_X; foodVX[fi] = -Math.abs(foodVX[fi]) * 0.5; }
+    if (fy < WALL_MIN_Y) { fy = WALL_MIN_Y; foodVY[fi] = Math.abs(foodVY[fi]) * 0.5; }
+    else if (fy > WALL_MAX_Y) { fy = WALL_MAX_Y; foodVY[fi] = -Math.abs(foodVY[fi]) * 0.5; }
+
+    foodX[fi] = fx;
+    foodY[fi] = fy;
   }
 }
 
@@ -940,21 +1008,20 @@ function render() {
     }
   }
 
-  // Render food pellets (golden circles, size proportional to remaining charges)
+  // Render food pellets (golden circles, size shrinks with sqrt of remaining charges)
   for (let fi = 0; fi < numFood; fi++) {
     if (!foodActive[fi]) continue;
-    const charges = foodCharges[fi];
-    const ratio = charges / FOOD_START_CHARGES;
-    const r = 3 + ratio * 5; // radius 3-8px based on remaining charges
+    const ratio = Math.sqrt(foodCharges[fi] / FOOD_START_CHARGES);
+    const r = 2 + ratio * 8; // radius 2-10px
     const x = (foodX[fi] - WALL_MIN_X) * scaleX;
     const y = (foodY[fi] - WALL_MIN_Y) * scaleY;
     // Outer glow
-    ctx.fillStyle = "rgba(255,180,30," + (0.15 + 0.15 * ratio).toFixed(2) + ")";
+    ctx.fillStyle = "rgba(255,180,30," + (0.10 + 0.20 * ratio).toFixed(2) + ")";
     ctx.beginPath();
-    ctx.arc(x, y, r + 3, 0, Math.PI * 2);
+    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
     ctx.fill();
     // Core
-    ctx.fillStyle = "rgba(255,210,60," + (0.6 + 0.4 * ratio).toFixed(2) + ")";
+    ctx.fillStyle = "rgba(255,210,60," + (0.50 + 0.50 * ratio).toFixed(2) + ")";
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
@@ -1163,7 +1230,7 @@ function loop(timestamp) {
   if (!running) return;
 
   simulate();
-  checkFoodCollisions();
+  updateFood();
   render();
 
   // FPS counter
@@ -1258,7 +1325,7 @@ onTap(document.getElementById("resetBtn"), function() {
   initParticles();
   assignStaticColors(0, BATCH_SIZE);
   // Clear all food pellets
-  for (let i = 0; i < numFood; i++) foodActive[i] = 0;
+  for (let i = 0; i < numFood; i++) { foodActive[i] = 0; foodVX[i] = 0; foodVY[i] = 0; }
   numFood = 0;
   document.getElementById("spawnBtn").style.display = "block";
 });
