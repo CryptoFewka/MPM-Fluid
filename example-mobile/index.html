@@ -49,6 +49,7 @@ canvas {
 #brightBtn { right: 140px; }
 #spawnBtn { left: 12px; }
 #resetBtn { left: 100px; }
+#foodBtn { left: 200px; }
 #reloadBtn {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   background: #2196F3; color: #fff; border: none; border-radius: 28px;
@@ -76,6 +77,7 @@ canvas {
 <div id="shake-flash"></div>
 <div id="hud"></div>
 <button id="resetBtn" class="ctrl-btn" style="display:none">Reset</button>
+<button id="foodBtn" class="ctrl-btn" style="display:none">Food</button>
 <button id="spawnBtn" class="ctrl-btn" style="display:none">Spawn</button>
 <button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
 <button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
@@ -102,7 +104,7 @@ if ("serviceWorker" in navigator) {
 const GRID_W = 100;
 const GRID_H = 75;
 const BATCH_SIZE = 8000;
-const MAX_PARTICLES = 24000; // up to 3 spawns
+const MAX_PARTICLES = 30000; // up to 3 spawns + food-spawned particles
 const WALL_BOUNCE_RAND = 0.03;
 let numParticles = BATCH_SIZE;
 let numSets = 1;
@@ -337,6 +339,20 @@ const pgy0 = new Float32Array(MAX_PARTICLES);
 const pgy1 = new Float32Array(MAX_PARTICLES);
 const pgy2 = new Float32Array(MAX_PARTICLES);
 
+// Per-particle eat cooldown: timestamp (ms) after which particle can eat food
+const pCanEatTime = new Float64Array(MAX_PARTICLES);
+
+// --- Food pellet system ---
+const MAX_FOOD = 50;
+const FOOD_START_CHARGES = 25;
+const FOOD_RADIUS = 2.0; // collision radius in grid units
+const FOOD_RADIUS2 = FOOD_RADIUS * FOOD_RADIUS;
+const foodX = new Float32Array(MAX_FOOD);
+const foodY = new Float32Array(MAX_FOOD);
+const foodCharges = new Int32Array(MAX_FOOD);
+const foodActive = new Uint8Array(MAX_FOOD);
+let numFood = 0;
+
 
 function initParticles() {
   for (let i = 0; i < BATCH_SIZE; i++) {
@@ -351,6 +367,7 @@ function initParticles() {
     pT11[i] = 0;
     particleSet[i] = 0;
     pMass[i] = setMass[0];
+    pCanEatTime[i] = 0;
   }
 }
 
@@ -372,6 +389,7 @@ function spawnParticles() {
     pT11[i] = 0;
     particleSet[i] = setId;
     pMass[i] = mass;
+    pCanEatTime[i] = 0;
   }
   assignStaticColors(start, end);
   numParticles = end;
@@ -379,6 +397,63 @@ function spawnParticles() {
   // Update spawn button
   if (numParticles >= MAX_PARTICLES) {
     document.getElementById("spawnBtn").style.display = "none";
+  }
+}
+
+function dispenseFood() {
+  // Find first inactive slot or append
+  let slot = -1;
+  for (let i = 0; i < numFood; i++) {
+    if (!foodActive[i]) { slot = i; break; }
+  }
+  if (slot === -1) {
+    if (numFood >= MAX_FOOD) return;
+    slot = numFood++;
+  }
+  foodX[slot] = WALL_MIN_X + 2 + Math.random() * (VIEW_W - 4);
+  foodY[slot] = WALL_MIN_Y + 2 + Math.random() * (VIEW_H - 4);
+  foodCharges[slot] = FOOD_START_CHARGES;
+  foodActive[slot] = 1;
+}
+
+function checkFoodCollisions() {
+  const now = performance.now();
+  for (let fi = 0; fi < numFood; fi++) {
+    if (!foodActive[fi]) continue;
+    const fx = foodX[fi];
+    const fy = foodY[fi];
+    const np0 = numParticles; // snapshot: don't check newly spawned particles this frame
+    for (let ip = 0; ip < np0; ip++) {
+      if (foodCharges[fi] <= 0) break;
+      if (now < pCanEatTime[ip]) continue;
+      const dx = px_pos[ip] - fx;
+      const dy = py_pos[ip] - fy;
+      if (dx * dx + dy * dy < FOOD_RADIUS2) {
+        foodCharges[fi]--;
+        // Spawn 3 new particles at food location
+        for (let k = 0; k < 3; k++) {
+          if (numParticles >= MAX_PARTICLES) break;
+          const np = numParticles;
+          px_pos[np] = Math.max(WALL_MIN_X, Math.min(WALL_MAX_X, fx + (Math.random() - 0.5) * 1.0));
+          py_pos[np] = Math.max(WALL_MIN_Y, Math.min(WALL_MAX_Y, fy + (Math.random() - 0.5) * 1.0));
+          pu_vel[np] = (Math.random() - 0.5) * 0.3;
+          pv_vel[np] = (Math.random() - 0.5) * 0.3;
+          ppu[np] = 0;
+          ppv[np] = 0;
+          pT00[np] = 0;
+          pT01[np] = 0;
+          pT11[np] = 0;
+          particleSet[np] = 0;
+          pMass[np] = setMass[0];
+          pCanEatTime[np] = now + 1000; // 1 second eat cooldown
+          staticColors[np] = (Math.random() * 64) | 0;
+          numParticles++;
+        }
+        if (foodCharges[fi] <= 0) {
+          foodActive[fi] = 0;
+        }
+      }
+    }
   }
 }
 
@@ -857,6 +932,26 @@ function render() {
     }
   }
 
+  // Render food pellets (golden circles, size proportional to remaining charges)
+  for (let fi = 0; fi < numFood; fi++) {
+    if (!foodActive[fi]) continue;
+    const charges = foodCharges[fi];
+    const ratio = charges / FOOD_START_CHARGES;
+    const r = 3 + ratio * 5; // radius 3-8px based on remaining charges
+    const x = (foodX[fi] - WALL_MIN_X) * scaleX;
+    const y = (foodY[fi] - WALL_MIN_Y) * scaleY;
+    // Outer glow
+    ctx.fillStyle = "rgba(255,180,30," + (0.15 + 0.15 * ratio).toFixed(2) + ")";
+    ctx.beginPath();
+    ctx.arc(x, y, r + 3, 0, Math.PI * 2);
+    ctx.fill();
+    // Core
+    ctx.fillStyle = "rgba(255,210,60," + (0.6 + 0.4 * ratio).toFixed(2) + ")";
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // Gravity direction indicator (small dot + line, no circle)
   const mag = Math.sqrt(gravityX * gravityX + gravityY * gravityY);
   if (mag > 0.0001) {
@@ -1060,6 +1155,7 @@ function loop(timestamp) {
   if (!running) return;
 
   simulate();
+  checkFoodCollisions();
   render();
 
   // FPS counter
@@ -1077,7 +1173,9 @@ function loop(timestamp) {
     } else {
       sensorStatus = "desktop mode";
     }
-    hud.textContent = fps + " fps | " + numParticles + " particles | " + sensorStatus;
+    let activeFood = 0;
+    for (let i = 0; i < numFood; i++) if (foodActive[i]) activeFood++;
+    hud.textContent = fps + " fps | " + numParticles + " particles | " + activeFood + " food | " + sensorStatus;
   }
 
   requestAnimationFrame(loop);
@@ -1101,6 +1199,7 @@ document.getElementById("startBtn").addEventListener("click", async function() {
   document.getElementById("brightBtn").style.display = "block";
   document.getElementById("spawnBtn").style.display = "block";
   document.getElementById("resetBtn").style.display = "block";
+  document.getElementById("foodBtn").style.display = "block";
 
   await enableSensors();
 
@@ -1150,7 +1249,15 @@ onTap(document.getElementById("resetBtn"), function() {
   numSets = 1;
   initParticles();
   assignStaticColors(0, BATCH_SIZE);
+  // Clear all food pellets
+  for (let i = 0; i < numFood; i++) foodActive[i] = 0;
+  numFood = 0;
   document.getElementById("spawnBtn").style.display = "block";
+});
+
+// --- Food button ---
+onTap(document.getElementById("foodBtn"), function() {
+  dispenseFood();
 });
 
 // --- Reload button ---
