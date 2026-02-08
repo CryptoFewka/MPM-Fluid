@@ -778,7 +778,7 @@ function render() {
   ctx.fillStyle = colorMode === "desert" ? "#14100a" : "#0a0a14";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  const circleRadius = 3; // radius for circle particles in pixels
+  const circleRadius = 1.5; // radius for circle particles in pixels
 
   const useBright = brightMode === "full";
 
@@ -995,10 +995,15 @@ function handleMotion(e) {
   linAccelX = -clampedX * LIN_ACCEL_STRENGTH;
   linAccelY = clampedY * LIN_ACCEL_STRENGTH;
 
-  // Z-axis rotation: spinning the phone flat
+  // Z-axis rotation: spinning the phone flat.
+  // Attenuate when phone is tilted (|beta| > 30°) because gimbal lock near
+  // vertical makes the Z-axis rotation rate unreliable and produces large
+  // phantom values that overwhelm gravity.
   const rot = e.rotationRate;
   if (rot && rot.alpha != null) {
-    spinRate = rot.alpha; // degrees/second around Z axis
+    const tilt = Math.abs(orientBeta);
+    const spinAtten = tilt < 30 ? 1.0 : tilt < 60 ? 1.0 - (tilt - 30) / 30 : 0.0;
+    spinRate = rot.alpha * spinAtten; // degrees/second around Z axis
   }
 }
 
