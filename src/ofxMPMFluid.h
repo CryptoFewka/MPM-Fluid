@@ -48,6 +48,7 @@
 #include "ofxMPMParticle.h"
 #include "ofxMPMNode.h"
 #include "ofxMPMObstacle.h"
+#include "ofxMPMFoodPellet.h"
 
 class ofxMPMFluid {
   public:
@@ -56,34 +57,38 @@ class ofxMPMFluid {
 	void setup(int maxParticles);
 	void update();
 	void draw();
-	
+
 	int getGridSizeX();
 	int getGridSizeY();
-	
-	float scaleFactor;	
+
+	float scaleFactor;
 	int numParticles;
 	float densitySetting;
-	float stiffness;     
-	float bulkViscosity; 
-	float elasticity;    
-	float viscosity;     
-	float yieldRate;     
-	bool  bGradient;	
+	float stiffness;
+	float bulkViscosity;
+	float elasticity;
+	float viscosity;
+	float yieldRate;
+	bool  bGradient;
 	float gravity;
 	bool  bDoObstacles;
-	float smoothing;	
-	
+	float smoothing;
+
 	vector<ofxMPMParticle*>& getParticles();
-	
+	void addFoodPellet(float x, float y);
+	vector<ofxMPMFoodPellet*>& getFoodPellets();
+
   protected:
 	float elapsed;
 
 	vector<ofxMPMParticle*> particles;
 	int maxNumParticles;
+	int additionalParticles;
 	vector< vector<ofxMPMNode*> > grid;
-	vector< ofxMPMNode*> activeNodes;	
+	vector< ofxMPMNode*> activeNodes;
 	int numActiveNodes;
-	
+
 	vector<ofxMPMObstacle*> obstacles;
-	
+	vector<ofxMPMFoodPellet*> foodPellets;
+
 };

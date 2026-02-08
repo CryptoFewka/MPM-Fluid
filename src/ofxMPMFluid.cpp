@@ -49,19 +49,20 @@
 #define gridSizeX 160
 #define gridSizeY 120 
 
-ofxMPMFluid::ofxMPMFluid() 
+ofxMPMFluid::ofxMPMFluid()
 :	densitySetting(5.0),
 	stiffness(.5),
 	bulkViscosity(3.0),
-	elasticity(1.0),    
-	viscosity(1.0),    
-	yieldRate(1.0),     
-	gravity(.002),	  
-	bGradient(false),	 
+	elasticity(1.0),
+	viscosity(1.0),
+	yieldRate(1.0),
+	gravity(.002),
+	bGradient(false),
 	bDoObstacles(true),
 	elapsed(0.0),
 	scaleFactor(1.0),
-	smoothing(1.0)
+	smoothing(1.0),
+	additionalParticles(0)
 {
 	//
 }
@@ -91,11 +92,19 @@ void ofxMPMFluid::setup(int maxParticles){
 	
 	//TODO: JG add and remove obistacles through API
 	obstacles.push_back( new ofxMPMObstacle(gridSizeX * 0.75, gridSizeY * 0.75, gridSizeX * 0.075) );
+
+	// Spawn initial food pellets scattered around the grid
+	addFoodPellet(gridSizeX * 0.25, gridSizeY * 0.5);
+	addFoodPellet(gridSizeX * 0.5,  gridSizeY * 0.6);
+	addFoodPellet(gridSizeX * 0.75, gridSizeY * 0.4);
+	addFoodPellet(gridSizeX * 0.4,  gridSizeY * 0.8);
+	addFoodPellet(gridSizeX * 0.6,  gridSizeY * 0.3);
 }
 
 void ofxMPMFluid::update(){
 	// Important: can't exceed maxNParticles!
-	numParticles = MIN(numParticles, maxNumParticles);
+	// Include particles spawned from food consumption
+	numParticles = MIN(numParticles + additionalParticles, maxNumParticles);
 	
 	//-------------------------
 	// Clear the grid. Necessary to begin the simulation.
@@ -535,17 +544,95 @@ void ofxMPMFluid::update(){
 	
 	
 	//----------------------------------
+	// Food pellet interaction pass
+	float dt = ofGetLastFrameTime();
+
+	// Decrement eat cooldown for all active particles
+	for (int ip = 0; ip < numParticles; ip++) {
+		ofxMPMParticle *p = particles[ip];
+		if (p->eatCooldown > 0) {
+			p->eatCooldown -= dt;
+		}
+	}
+
+	// Check particle-food pellet interactions
+	// Collect spawn events to avoid modifying numParticles during iteration
+	struct SpawnEvent {
+		float x, y;
+	};
+	vector<SpawnEvent> spawns;
+
+	for (int fi = foodPellets.size() - 1; fi >= 0; fi--) {
+		ofxMPMFoodPellet *food = foodPellets[fi];
+		if (!food->active) continue;
+
+		float foodR2 = food->radius * food->radius;
+
+		for (int ip = 0; ip < numParticles; ip++) {
+			if (food->charges <= 0) break;
+
+			ofxMPMParticle *p = particles[ip];
+			if (p->eatCooldown > 0) continue;
+
+			float fdx = p->x - food->x;
+			float fdy = p->y - food->y;
+			float dist2 = fdx * fdx + fdy * fdy;
+
+			if (dist2 < foodR2) {
+				food->charges--;
+				SpawnEvent se;
+				se.x = food->x;
+				se.y = food->y;
+				spawns.push_back(se);
+
+				if (food->charges <= 0) {
+					food->active = false;
+				}
+			}
+		}
+	}
+
+	// Spawn new particles from food consumption
+	for (int si = 0; si < (int)spawns.size(); si++) {
+		for (int sp = 0; sp < 3; sp++) {
+			if (numParticles < maxNumParticles) {
+				ofxMPMParticle *newP = particles[numParticles];
+				newP->x = spawns[si].x + ofRandom(-1.0, 1.0);
+				newP->y = spawns[si].y + ofRandom(-1.0, 1.0);
+				newP->u = ofRandom(-0.5, 0.5);
+				newP->v = ofRandom(-0.5, 0.5);
+				newP->pu = 0;
+				newP->pv = 0;
+				newP->T00 = 0;
+				newP->T01 = 0;
+				newP->T11 = 0;
+				newP->eatCooldown = 1.0;
+				numParticles++;
+				additionalParticles++;
+			}
+		}
+	}
+
+	// Remove depleted food pellets
+	for (int fi = foodPellets.size() - 1; fi >= 0; fi--) {
+		if (!foodPellets[fi]->active) {
+			delete foodPellets[fi];
+			foodPellets.erase(foodPellets.begin() + fi);
+		}
+	}
+
+	//----------------------------------
 	long t4 = ofGetElapsedTimeMillis();
-	
+
 	long dt0 = t1-t0;
 	long dt1 = t2-t1;
 	long dt2 = t3-t2;
 	long dt3 = t4-t3;
-	long dt =  t4 - t0;
-	elapsed = 0.95*elapsed + 0.05*(dt);
+	long dtTotal = t4 - t0;
+	elapsed = 0.95*elapsed + 0.05*(dtTotal);
 	// Timing: in case you're curious about CPU consumption, uncomment this:
-	// printf("Elapsed = %d	%d	%d	%d	%f\n", dt0, dt1, dt2, dt3, elapsed); 
-	
+	// printf("Elapsed = %d	%d	%d	%d	%f\n", dt0, dt1, dt2, dt3, elapsed);
+
 }
 
 void ofxMPMFluid::draw(){
@@ -572,6 +659,17 @@ void ofxMPMFluid::draw(){
 		ofxMPMParticle* p = particles[ip];
 		ofCircle(p->x, p->y, circleRadius);
 	}
+
+	// Draw food pellets as larger green circles
+	for (int fi = 0; fi < (int)foodPellets.size(); fi++) {
+		ofxMPMFoodPellet *food = foodPellets[fi];
+		if (!food->active) continue;
+		// Color varies from bright green (full) to dim red (nearly depleted)
+		float chargeRatio = (float)food->charges / 25.0f;
+		ofSetColor((int)(255 * (1.0f - chargeRatio)), (int)(255 * chargeRatio), 50, 220);
+		ofCircle(food->x, food->y, food->radius * chargeRatio + 1.0f);
+	}
+
 	ofPopMatrix();
 }
 
@@ -585,5 +683,13 @@ int ofxMPMFluid::getGridSizeX(){
 
 int ofxMPMFluid::getGridSizeY(){
 	return gridSizeY;
+}
+
+void ofxMPMFluid::addFoodPellet(float x, float y){
+	foodPellets.push_back(new ofxMPMFoodPellet(x, y));
+}
+
+vector<ofxMPMFoodPellet*>& ofxMPMFluid::getFoodPellets(){
+	return foodPellets;
 }
 

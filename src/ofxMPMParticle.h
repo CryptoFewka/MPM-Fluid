@@ -71,7 +71,9 @@ class ofxMPMParticle {
 	float py[3];
 	float gx[3];
 	float gy[3];
-	
+
+	float eatCooldown;
+
 	ofxMPMParticle ( float inx, float iny, float inu, float inv);
 
 };
