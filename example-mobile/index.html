@@ -49,6 +49,15 @@ canvas {
 #brightBtn { right: 140px; }
 #spawnBtn { left: 12px; }
 #resetBtn { left: 100px; }
+.side-btn {
+  position: fixed; right: 12px;
+  background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.25); border-radius: 20px;
+  padding: 8px 16px; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: pointer; z-index: 6; -webkit-tap-highlight-color: transparent;
+}
+.side-btn:active { background: rgba(255,255,255,0.25); }
+#foodBtn { top: 60px; }
 #reloadBtn {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   background: #2196F3; color: #fff; border: none; border-radius: 28px;
@@ -76,6 +85,7 @@ canvas {
 <div id="shake-flash"></div>
 <div id="hud"></div>
 <button id="resetBtn" class="ctrl-btn" style="display:none">Reset</button>
+<button id="foodBtn" class="side-btn" style="display:none">Food</button>
 <button id="spawnBtn" class="ctrl-btn" style="display:none">Spawn</button>
 <button id="brightBtn" class="ctrl-btn" style="display:none">Vel dim: on</button>
 <button id="colorBtn" class="ctrl-btn" style="display:none">Color: velocity</button>
@@ -102,7 +112,7 @@ if ("serviceWorker" in navigator) {
 const GRID_W = 100;
 const GRID_H = 75;
 const BATCH_SIZE = 8000;
-const MAX_PARTICLES = 24000; // up to 3 spawns
+const MAX_PARTICLES = 30000; // up to 3 spawns + food-spawned particles
 const WALL_BOUNCE_RAND = 0.03;
 let numParticles = BATCH_SIZE;
 let numSets = 1;
@@ -230,12 +240,39 @@ function buildEmeraldPalette() {
 }
 buildEmeraldPalette();
 
+// Amber/orange palette: velocity-mapped (for food-spawned particles)
+const amberPalette = [];
+function buildAmberPalette() {
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r, g, b;
+    if (t < 0.2) {
+      const s = t / 0.2;
+      r = 80 + 80 * s; g = 40 + 30 * s; b = 5 + 10 * s;
+    } else if (t < 0.4) {
+      const s = (t - 0.2) / 0.2;
+      r = 160 + 50 * s; g = 70 + 50 * s; b = 15 + 10 * s;
+    } else if (t < 0.6) {
+      const s = (t - 0.4) / 0.2;
+      r = 210 + 35 * s; g = 120 + 60 * s; b = 25 + 15 * s;
+    } else if (t < 0.8) {
+      const s = (t - 0.6) / 0.2;
+      r = 245 + 10 * s; g = 180 + 40 * s; b = 40 + 40 * s;
+    } else {
+      const s = (t - 0.8) / 0.2;
+      r = 255; g = 220 + 35 * s; b = 80 + 100 * s;
+    }
+    amberPalette.push("rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")");
+  }
+}
+buildAmberPalette();
+
 // Per-set palette arrays (indexed by set ID)
-const setVelPalettes = [palette, magentaPalette, emeraldPalette];
-const setDesertPalettes = [desertPalette, magentaPalette, emeraldPalette];
-const setBrightColors = ["rgb(200,220,255)", "rgb(255,160,220)", "rgb(140,255,180)"];
-const setBrightOcean = ["rgb(140,200,255)", "rgb(220,140,255)", "rgb(140,255,200)"];
-const setBrightDesert = ["rgb(230,190,120)", "rgb(255,160,220)", "rgb(140,255,180)"];
+const setVelPalettes = [palette, magentaPalette, emeraldPalette, amberPalette];
+const setDesertPalettes = [desertPalette, magentaPalette, emeraldPalette, amberPalette];
+const setBrightColors = ["rgb(200,220,255)", "rgb(255,160,220)", "rgb(140,255,180)", "rgb(255,190,80)"];
+const setBrightOcean = ["rgb(140,200,255)", "rgb(220,140,255)", "rgb(140,255,200)", "rgb(255,180,100)"];
+const setBrightDesert = ["rgb(230,190,120)", "rgb(255,160,220)", "rgb(140,255,180)", "rgb(255,190,80)"];
 
 // Static shades per set (64 each)
 let colorMode = "velocity"; // "velocity", "static", or "desert"
@@ -257,7 +294,8 @@ function buildStaticPalette64(rMin, rMax, gMin, gMax, bMin, bMax) {
 const setStaticPalettes = [
   buildStaticPalette64(80, 160, 140, 200, 220, 255),   // blue shades
   buildStaticPalette64(180, 255, 80, 160, 180, 255),    // magenta shades
-  buildStaticPalette64(80, 160, 200, 255, 120, 180)     // green shades
+  buildStaticPalette64(80, 160, 200, 255, 120, 180),    // green shades
+  buildStaticPalette64(180, 255, 120, 200, 20, 80)      // amber shades
 ];
 
 function assignStaticColors(start, end) {
@@ -321,7 +359,8 @@ const pcy = new Int32Array(MAX_PARTICLES);
 
 // Per-particle mass (heavier sets sink, lighter float)
 const pMass = new Float32Array(MAX_PARTICLES);
-const setMass = [1.0, 2.0, 3.0]; // each spawn is denser
+const setMass = [1.0, 2.0, 3.0, 2.0]; // sets 0-2 = user spawns, set 3 = food-spawned (amber, dense)
+const FOOD_PARTICLE_SET = 3;
 
 // Basis function values per particle (3 each)
 const ppx0 = new Float32Array(MAX_PARTICLES);
@@ -337,6 +376,23 @@ const pgy0 = new Float32Array(MAX_PARTICLES);
 const pgy1 = new Float32Array(MAX_PARTICLES);
 const pgy2 = new Float32Array(MAX_PARTICLES);
 
+// Per-particle eat cooldown: timestamp (ms) after which particle can eat food
+const pCanEatTime = new Float64Array(MAX_PARTICLES);
+
+// --- Food pellet system ---
+const MAX_FOOD = 50;
+const FOOD_START_CHARGES = 250;
+const FOOD_BASE_RADIUS = 2.0; // collision radius at full charges (grid units)
+const FOOD_MIN_RADIUS = 0.5;  // minimum collision radius (grid units)
+const FOOD_IMPULSE = 5.0;     // rocket impulse strength per consumption event
+const foodX = new Float32Array(MAX_FOOD);
+const foodY = new Float32Array(MAX_FOOD);
+const foodVX = new Float32Array(MAX_FOOD);
+const foodVY = new Float32Array(MAX_FOOD);
+const foodCharges = new Int32Array(MAX_FOOD);
+const foodActive = new Uint8Array(MAX_FOOD);
+let numFood = 0;
+
 
 function initParticles() {
   for (let i = 0; i < BATCH_SIZE; i++) {
@@ -351,6 +407,7 @@ function initParticles() {
     pT11[i] = 0;
     particleSet[i] = 0;
     pMass[i] = setMass[0];
+    pCanEatTime[i] = 0;
   }
 }
 
@@ -372,6 +429,7 @@ function spawnParticles() {
     pT11[i] = 0;
     particleSet[i] = setId;
     pMass[i] = mass;
+    pCanEatTime[i] = 0;
   }
   assignStaticColors(start, end);
   numParticles = end;
@@ -379,6 +437,135 @@ function spawnParticles() {
   // Update spawn button
   if (numParticles >= MAX_PARTICLES) {
     document.getElementById("spawnBtn").style.display = "none";
+  }
+}
+
+function dispenseFood() {
+  // Find first inactive slot or append
+  let slot = -1;
+  for (let i = 0; i < numFood; i++) {
+    if (!foodActive[i]) { slot = i; break; }
+  }
+  if (slot === -1) {
+    if (numFood >= MAX_FOOD) return;
+    slot = numFood++;
+  }
+  foodX[slot] = WALL_MIN_X + 2 + Math.random() * (VIEW_W - 4);
+  foodY[slot] = WALL_MIN_Y + 1;
+  foodCharges[slot] = FOOD_START_CHARGES;
+  foodActive[slot] = 1;
+  foodVX[slot] = 0;
+  foodVY[slot] = 0;
+}
+
+function updateFood() {
+  const now = performance.now();
+  const GW = GRID_W;
+  const GH = GRID_H;
+
+  for (let fi = 0; fi < numFood; fi++) {
+    if (!foodActive[fi]) continue;
+    let fx = foodX[fi];
+    let fy = foodY[fi];
+    const charges = foodCharges[fi];
+
+    // Food mass: heavy when full (sinks like heaviest particles), light when depleted
+    const foodMass = 0.5 + (charges / FOOD_START_CHARGES) * 2.5; // 3.0 full → 0.5 empty
+
+    // Effective collision radius shrinks with remaining charges
+    const chargeRatio = Math.sqrt(charges / FOOD_START_CHARGES);
+    const effRadius = FOOD_MIN_RADIUS + (FOOD_BASE_RADIUS - FOOD_MIN_RADIUS) * chargeRatio;
+    const er2 = effRadius * effRadius;
+
+    // --- Sample grid velocity at food position (bilinear interpolation) ---
+    const cx0 = fx | 0;
+    const cy0 = fy | 0;
+    const cx0c = Math.max(0, Math.min(cx0, GW - 2));
+    const cy0c = Math.max(0, Math.min(cy0, GH - 2));
+    const u = fx - cx0c;
+    const v = fy - cy0c;
+    const n00 = cx0c * GH + cy0c;
+    const n01 = cx0c * GH + (cy0c + 1);
+    const n10 = (cx0c + 1) * GH + cy0c;
+    const n11 = (cx0c + 1) * GH + (cy0c + 1);
+    const w00 = (1 - u) * (1 - v);
+    const w10 = u * (1 - v);
+    const w01 = (1 - u) * v;
+    const w11 = u * v;
+    const gridU = gu[n00] * w00 + gu[n10] * w10 + gu[n01] * w01 + gu[n11] * w11;
+    const gridV = gv[n00] * w00 + gv[n10] * w10 + gv[n01] * w01 + gv[n11] * w11;
+    const gridMass = gm[n00] * w00 + gm[n10] * w10 + gm[n01] * w01 + gm[n11] * w11;
+
+    // Only apply fluid drag when submerged (grid has mass = fluid present)
+    if (gridMass > 0.1) {
+      const drag = 0.3 / foodMass;
+      foodVX[fi] += drag * (gridU - foodVX[fi]);
+      foodVY[fi] += drag * (gridV - foodVY[fi]);
+    }
+
+    // Gravity (constant acceleration, like freefall — same rate for all masses)
+    foodVX[fi] += gravityX;
+    foodVY[fi] += gravityY;
+
+    // --- Check collisions with particles (eating + rocket impulse) ---
+    const np0 = numParticles; // snapshot: don't check newly spawned particles this frame
+    for (let ip = 0; ip < np0; ip++) {
+      if (foodCharges[fi] <= 0) break;
+      if (now < pCanEatTime[ip]) continue;
+      const dx = px_pos[ip] - fx;
+      const dy = py_pos[ip] - fy;
+      if (dx * dx + dy * dy < er2) {
+        foodCharges[fi]--;
+
+        // Rocket impulse: push food away from the eating particle
+        const dist = Math.sqrt(dx * dx + dy * dy) + 0.01;
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const accel = FOOD_IMPULSE / Math.max(1, foodCharges[fi]);
+        foodVX[fi] -= nx * accel;
+        foodVY[fi] -= ny * accel;
+
+        // Spawn 3 new particles at the contact point (food edge facing eater)
+        for (let k = 0; k < 3; k++) {
+          if (numParticles >= MAX_PARTICLES) break;
+          const np = numParticles;
+          px_pos[np] = Math.max(WALL_MIN_X, Math.min(WALL_MAX_X,
+            fx + nx * effRadius * 0.8 + (Math.random() - 0.5) * 0.3));
+          py_pos[np] = Math.max(WALL_MIN_Y, Math.min(WALL_MAX_Y,
+            fy + ny * effRadius * 0.8 + (Math.random() - 0.5) * 0.3));
+          pu_vel[np] = nx * 0.2 + (Math.random() - 0.5) * 0.1;
+          pv_vel[np] = ny * 0.2 + (Math.random() - 0.5) * 0.1;
+          ppu[np] = 0;
+          ppv[np] = 0;
+          pT00[np] = 0;
+          pT01[np] = 0;
+          pT11[np] = 0;
+          particleSet[np] = FOOD_PARTICLE_SET;
+          pMass[np] = setMass[FOOD_PARTICLE_SET];
+          pCanEatTime[np] = 0;
+          staticColors[np] = (Math.random() * 64) | 0;
+          numParticles++;
+        }
+        if (foodCharges[fi] <= 0) {
+          foodActive[fi] = 0;
+        }
+      }
+    }
+
+    if (!foodActive[fi]) continue;
+
+    // Update position
+    fx += foodVX[fi];
+    fy += foodVY[fi];
+
+    // Wall bounce
+    if (fx < WALL_MIN_X) { fx = WALL_MIN_X; foodVX[fi] = Math.abs(foodVX[fi]) * 0.5; }
+    else if (fx > WALL_MAX_X) { fx = WALL_MAX_X; foodVX[fi] = -Math.abs(foodVX[fi]) * 0.5; }
+    if (fy < WALL_MIN_Y) { fy = WALL_MIN_Y; foodVY[fi] = Math.abs(foodVY[fi]) * 0.5; }
+    else if (fy > WALL_MAX_Y) { fy = WALL_MAX_Y; foodVY[fi] = -Math.abs(foodVY[fi]) * 0.5; }
+
+    foodX[fi] = fx;
+    foodY[fi] = fy;
   }
 }
 
@@ -783,7 +970,7 @@ function render() {
   const useBright = brightMode === "full";
 
   const NP = numParticles;
-  const NS = numSets;
+  const NS = Math.max(numSets, FOOD_PARTICLE_SET + 1);
 
   if (useBright) {
     // Full brightness: uniform color per set, circles
@@ -855,6 +1042,25 @@ function render() {
         if (any) ctx.fill();
       }
     }
+  }
+
+  // Render food pellets (golden circles, size shrinks with sqrt of remaining charges)
+  for (let fi = 0; fi < numFood; fi++) {
+    if (!foodActive[fi]) continue;
+    const ratio = Math.sqrt(foodCharges[fi] / FOOD_START_CHARGES);
+    const r = 2 + ratio * 8; // radius 2-10px
+    const x = (foodX[fi] - WALL_MIN_X) * scaleX;
+    const y = (foodY[fi] - WALL_MIN_Y) * scaleY;
+    // Outer glow
+    ctx.fillStyle = "rgba(255,180,30," + (0.10 + 0.20 * ratio).toFixed(2) + ")";
+    ctx.beginPath();
+    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Core
+    ctx.fillStyle = "rgba(255,210,60," + (0.50 + 0.50 * ratio).toFixed(2) + ")";
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // Gravity direction indicator (small dot + line, no circle)
@@ -1060,6 +1266,7 @@ function loop(timestamp) {
   if (!running) return;
 
   simulate();
+  updateFood();
   render();
 
   // FPS counter
@@ -1077,7 +1284,9 @@ function loop(timestamp) {
     } else {
       sensorStatus = "desktop mode";
     }
-    hud.textContent = fps + " fps | " + numParticles + " particles | " + sensorStatus;
+    let activeFood = 0;
+    for (let i = 0; i < numFood; i++) if (foodActive[i]) activeFood++;
+    hud.textContent = fps + " fps | " + numParticles + " particles | " + activeFood + " food | " + sensorStatus;
   }
 
   requestAnimationFrame(loop);
@@ -1101,6 +1310,7 @@ document.getElementById("startBtn").addEventListener("click", async function() {
   document.getElementById("brightBtn").style.display = "block";
   document.getElementById("spawnBtn").style.display = "block";
   document.getElementById("resetBtn").style.display = "block";
+  document.getElementById("foodBtn").style.display = "block";
 
   await enableSensors();
 
@@ -1150,7 +1360,15 @@ onTap(document.getElementById("resetBtn"), function() {
   numSets = 1;
   initParticles();
   assignStaticColors(0, BATCH_SIZE);
+  // Clear all food pellets
+  for (let i = 0; i < numFood; i++) { foodActive[i] = 0; foodVX[i] = 0; foodVY[i] = 0; }
+  numFood = 0;
   document.getElementById("spawnBtn").style.display = "block";
+});
+
+// --- Food button ---
+onTap(document.getElementById("foodBtn"), function() {
+  dispenseFood();
 });
 
 // --- Reload button ---
